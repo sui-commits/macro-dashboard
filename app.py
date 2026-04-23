@@ -9,35 +9,36 @@ import numpy as np
 from dbnomics import fetch_series
 from sklearn.ensemble import RandomForestRegressor
 import warnings
+
+# エラー抑制
 warnings.filterwarnings('ignore')
 
-# --- ページ設定 ---
-st.set_page_config(page_title="Macro Quant Terminal", layout="wide", initial_sidebar_state="expanded")
+# --- 1. ページ基本設定 & プロ仕様CSS ---
+st.set_page_config(page_title="Macro Quant Terminal Pro", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
-.stApp { background-color: #0d1117; color: #c9d1d9; font-family: 'Consolas', 'Courier New', monospace !important; }
+.stApp { background-color: #0d1117; color: #c9d1d9; font-family: 'Consolas', monospace; }
 div[data-testid="metric-container"] {
     background-color: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.3); transition: transform 0.2s;
 }
-div[data-testid="metric-container"]:hover { transform: translateY(-2px); border-color: #58a6ff; }
-.stTabs [data-baseweb="tab-list"] { gap: 4px; }
-.stTabs [data-baseweb="tab"] { background-color: #21262d; border-radius: 4px; padding: 8px 16px; }
-.stTabs [aria-selected="true"] { border-bottom: 2px solid #58a6ff; }
+.insight-box { background-color: #161b22; border-left: 5px solid #58a6ff; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+.strategy-card { background-color: #1c2128; border: 1px solid #444c56; padding: 20px; border-radius: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
+# --- 2. 認証 & データロード準備 ---
 API_KEY = st.secrets["FRED_API_KEY"]
 SHEET_URL = st.secrets["SHEET_URL"]
 fred = Fred(api_key=API_KEY)
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=600)
 def load_settings():
     df = pd.read_csv(SHEET_URL)
     for col in df.columns: df[col] = df[col].astype(str).str.strip()
     return df
 
+# --- 3. サイドバーナビゲーション ---
 try:
     settings_df = load_settings()
     st.sidebar.title("💎 Macro Navigation")
@@ -45,19 +46,21 @@ try:
         "1. Market Dynamics (現在)", 
         "2. Macro Economics (深層)", 
         "3. Historical Analysis (過去比較)",
-        "4. ML Investment Plan (投資計画)"
+        "4. Investment Strategy (AI分析)"
     ])
 
     # ==========================================
-    # PAGE 1: Market Dynamics
+    # PAGE 1: Market Dynamics (現在の需給・勢い)
     # ==========================================
     if page == "1. Market Dynamics (現在)":
         st.title("📈 Market Dynamics & Capital Rotation")
-        st.markdown("### ⚡ Real-time Market Board")
+        
+        # 225225風ボード
+        st.markdown("### ⚡ Real-time Macro Board")
         board_cols = st.columns(5)
         count = 0
         for _, row in settings_df.iterrows():
-            if row['ソース'] in ['FRED', 'Yahoo'] and count < 25:
+            if row['ソース'] in ['FRED', 'Yahoo'] and count < 15:
                 try:
                     if row['ソース'] == 'FRED':
                         d = fred.get_series(row['ティッカー']).dropna()
@@ -68,283 +71,180 @@ try:
                         board_cols[count % 5].metric(label=row['データ名'], value=f"{d.iloc[-1]:.2f}", delta=f"{pct:.2f}%")
                     count += 1
                 except: pass
-        
-        st.markdown("---")
-        st.markdown("### 🔄 US Sector Rotation (1-Month Momentum)")
-        with st.spinner('セクターパフォーマンスを取得中...'):
-            try:
-                sectors = {'XLK': '情報技術', 'XLF': '金融', 'XLV': 'ヘルスケア', 'XLY': '一般消費財', 'XLC': '通信', 'XLI': '資本財', 'XLP': '生活必需品', 'XLE': 'エネルギー', 'XLU': '公益事業', 'XLRE': '不動産', 'XLB': '素材'}
-                sector_data = yf.download(list(sectors.keys()), period="1mo", progress=False)['Close']
-                perf = ((sector_data.iloc[-1] / sector_data.iloc[0]) - 1) * 100
-                perf_df = pd.DataFrame({'Sector': [sectors[tic] for tic in perf.index], 'Performance (%)': perf.values}).sort_values(by='Performance (%)', ascending=True)
-                fig_sec = px.bar(perf_df, x='Performance (%)', y='Sector', orientation='h', color='Performance (%)', color_continuous_scale='RdYlGn')
-                fig_sec.update_layout(height=400, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0))
-                st.plotly_chart(fig_sec, use_container_width=True)
-            except: st.warning("セクターデータの取得をスキップしました。")
 
         st.markdown("---")
-        st.markdown("### 🛡️ Positioning & Options")
+        # セクターローテーション
+        st.markdown("### 🔄 Sector Rotation (1-Month Momentum)")
+        sectors = {'XLK':'Tech', 'XLF':'Finance', 'XLV':'Health', 'XLY':'ConsDis', 'XLC':'Comm', 'XLI':'Indust', 'XLP':'Staples', 'XLE':'Energy', 'XLU':'Utility', 'XLRE':'REIT', 'XLB':'Basic'}
+        sector_data = yf.download(list(sectors.keys()), period="1mo", progress=False)['Close']
+        perf = ((sector_data.iloc[-1] / sector_data.iloc[0]) - 1) * 100
+        perf_df = pd.DataFrame({'Sector': [sectors[t] for t in perf.index], 'Perf': perf.values}).sort_values('Perf')
+        st.plotly_chart(px.bar(perf_df, x='Perf', y='Sector', orientation='h', color='Perf', color_continuous_scale='RdYlGn', template="plotly_dark", height=400), use_container_width=True)
+
+        # CTA / Options インサイト
+        st.markdown("### 🛡️ Positioning & Flows")
         c1, c2 = st.columns(2)
-        cta_opts = settings_df[settings_df['ソース'].isin(['CTA', 'Options'])]
-        for idx, row in cta_opts.iterrows():
-            with (c1 if idx % 2 == 0 else c2):
-                if row['ソース'] == 'CTA':
-                    try:
-                        d = yf.Ticker(row['ティッカー']).history(period="2y")
-                        d.index = pd.to_datetime(d.index).tz_localize(None)
-                        d['SMA20'], d['SMA200'] = d['Close'].rolling(20).mean(), d['Close'].rolling(200).mean()
-                        fig = go.Figure()
-                        fig.add_trace(go.Scatter(x=d.index, y=d['Close'], name='Price', line=dict(color='#c9d1d9')))
-                        fig.add_trace(go.Scatter(x=d.index, y=np.where(d['SMA20']>d['SMA200'], d['Close'].max(), d['Close'].min()), fill='tozeroy', fillcolor='rgba(63,185,80,0.1)', line=dict(width=0)))
-                        max_d = d.index.max()
-                        fig.update_xaxes(range=[max_d - pd.DateOffset(months=6), max_d + pd.DateOffset(days=5)])
-                        fig.update_layout(title=row['データ名'], height=300, template="plotly_dark", margin=dict(l=0,r=0,t=30,b=0))
-                        st.plotly_chart(fig, use_container_width=True)
-                    except: pass
-                elif row['ソース'] == 'Options':
-                    try:
-                        s = yf.Ticker(row['ティッカー'])
-                        exp = s.options[0]
-                        c, p = s.option_chain(exp).calls, s.option_chain(exp).puts
-                        strikes = sorted(list(set(c['strike']).union(set(p['strike']))))
-                        mp, min_l = 0, float('inf')
-                        for strk in strikes:
-                            l = c[c['strike']<strk].apply(lambda x:(strk-x['strike'])*x['openInterest'], axis=1).sum() + p[p['strike']>strk].apply(lambda x:(x['strike']-strk)*x['openInterest'], axis=1).sum()
-                            if l < min_l: min_l, mp = l, strk
-                        curr = s.history(period='1d')['Close'].iloc[-1]
-                        fig = go.Figure()
-                        fig.add_trace(go.Bar(x=c['strike'], y=c['openInterest'], name='Call', marker_color='#58a6ff'))
-                        fig.add_trace(go.Bar(x=p['strike'], y=p['openInterest'], name='Put', marker_color='#f85149'))
-                        fig.add_vline(x=mp, line_dash="dash", line_color="yellow", annotation_text=f"MP:{mp}", annotation_position="top left")
-                        fig.add_vline(x=curr, line_dash="solid", line_color="#3fb950", annotation_text=f"Price:{curr:.1f}", annotation_position="bottom right")
-                        fig.update_layout(title=f"{row['データ名']} ({exp})", height=300, template="plotly_dark", barmode='group')
-                        st.plotly_chart(fig, use_container_width=True)
-                    except: pass
+        with c1:
+            spy_d = yf.Ticker("SPY").history(period="2y")
+            sma200 = spy_d['Close'].rolling(200).mean().iloc[-1]
+            dist = ((spy_d['Close'].iloc[-1] - sma200) / sma200) * 100
+            st.info(f"**CTA Trend:** 200日線乖離率 {dist:.1f}% ({'強気維持' if dist > 0 else '弱気圏'})")
+        with c2:
+            try:
+                spy_obj = yf.Ticker("SPY")
+                exp = spy_obj.options[0]
+                calls = spy_obj.option_chain(exp).calls
+                puts = spy_obj.option_chain(exp).puts
+                strikes = sorted(list(set(calls['strike']).union(set(puts['strike']))))
+                mp, min_l = 0, float('inf')
+                for s in strikes:
+                    l = calls[calls['strike']<s].apply(lambda x:(s-x['strike'])*x['openInterest'], axis=1).sum() + puts[puts['strike']>s].apply(lambda x:(x['strike']-s)*x['openInterest'], axis=1).sum()
+                    if l < min_l: min_l, mp = l, s
+                st.success(f"**Option Wall:** Max Pain ${mp:.0f} (現在のターゲット価格)")
+            except: st.write("Options data unavailable")
 
     # ==========================================
-    # PAGE 2: Macro Economics
+    # PAGE 2: Macro Economics (マクロ指標と相関)
     # ==========================================
     elif page == "2. Macro Economics (深層)":
-        st.title("🏛️ Macro Economic Analysis (PhD Level)")
-        
-        # ▼ スイングトレード特化：直近1週間の1時間足相関マトリックス
-        st.markdown("### 🔗 Cross-Asset Correlation Matrix (1 Week / 1H Interval)")
-        st.markdown("スイングトレード向けに解像度を上げ、**直近1週間の「1時間足」**を用いた精密な相関関係を可視化します。短期的な資金逃避や連動性の崩れを察知します。")
-        with st.spinner('スイング用・高解像度相関データを計算中...'):
-            try:
-                assets = {'SPY': 'S&P500', 'TLT': '米国債20年', 'GLD': 'ゴールド', 'USO': '原油', 'UUP': 'ドル指数', '^VIX': 'VIX'}
-                corr_data = yf.download(list(assets.keys()), period="1wk", interval="1h", progress=False)['Close'].rename(columns=assets)
-                corr_matrix = corr_data.corr()
-                fig_corr = go.Figure(data=go.Heatmap(z=corr_matrix.values, x=corr_matrix.columns, y=corr_matrix.columns, colorscale='RdBu', zmin=-1, zmax=1))
-                fig_corr.update_layout(height=400, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0))
-                st.plotly_chart(fig_corr, use_container_width=True)
-            except Exception as e: st.warning(f"相関データの計算に失敗しました（時間外等の理由）: {e}")
+        st.title("🏛️ Macro Economic Analysis")
+        st.markdown("### 🔗 Swing Correlation Matrix (1Week / 1Hour)")
+        try:
+            assets = {'SPY':'Stock', 'TLT':'Bond', 'GLD':'Gold', 'USO':'Oil', 'UUP':'Dollar', '^VIX':'VIX'}
+            corr_data = yf.download(list(assets.keys()), period="1wk", interval="1h", progress=False)['Close'].rename(columns=assets).corr()
+            st.plotly_chart(px.imshow(corr_data, text_auto=True, color_continuous_scale='RdBu_r', template="plotly_dark", height=450), use_container_width=True)
+        except: pass
 
         st.markdown("---")
-        tabs_names = [t for t in settings_df['タブ名'].unique() if t not in ['オプション動向', 'CTAトレンド']]
-        tabs = st.tabs(tabs_names)
-        for i, t_name in enumerate(tabs_names):
+        tabs = st.tabs(settings_df['タブ名'].unique().tolist())
+        for i, t_name in enumerate(settings_df['タブ名'].unique()):
             with tabs[i]:
                 t_df = settings_df[settings_df['タブ名'] == t_name]
-                g_names = t_df['グラフ名'].unique()
                 cols = st.columns(2)
-                for g_idx, g_name in enumerate(g_names):
+                for g_idx, g_name in enumerate(t_df['グラフ名'].unique()):
                     with cols[g_idx % 2]:
-                        g_df = t_df[t_df['グラフ名'] == g_name]
                         fig = make_subplots(specs=[[{"secondary_y": True}]])
+                        g_data = t_df[t_df['グラフ名'] == g_name]
                         max_dt = None
-                        for _, r in g_df.iterrows():
+                        for _, r in g_data.iterrows():
                             try:
-                                d = None
-                                if r['ソース'] == 'FRED': d = fred.get_series(r['ティッカー']).loc['2020-01-01':]
-                                elif r['ソース'] == 'Yahoo': d = yf.Ticker(r['ティッカー']).history(start='2020-01-01')['Close']
-                                elif r['ソース'] == 'DBnomics':
-                                    db_df = fetch_series(r['ティッカー'])
-                                    if not db_df.empty: d = db_df[['period', 'value']].dropna().set_index('period')['value']
-                                if d is not None and not d.empty:
+                                if r['ソース'] == 'FRED': d = fred.get_series(r['ティッカー']).loc['2022-01-01':]
+                                elif r['ソース'] == 'Yahoo': d = yf.Ticker(r['ティッカー']).history(start='2022-01-01')['Close']
+                                elif r['ソース'] == 'DBnomics': d = fetch_series(r['ティッカー']).set_index('period')['value']
+                                if d is not None:
                                     d.index = pd.to_datetime(d.index).tz_localize(None)
                                     if max_dt is None or d.index.max() > max_dt: max_dt = d.index.max()
                                     fig.add_trace(go.Scatter(x=d.index, y=d.values, name=r['データ名']), secondary_y=(r['軸']=='副軸'))
                             except: pass
-                        if max_dt: fig.update_xaxes(range=[max_dt - pd.DateOffset(months=6), max_dt + pd.DateOffset(days=5)])
-                        fig.update_layout(title=g_name, height=300, template="plotly_dark", hovermode="x unified", margin=dict(l=0,r=0,t=30,b=0))
+                        if max_dt: fig.update_xaxes(range=[max_dt - pd.DateOffset(months=6), max_dt])
+                        fig.update_layout(title=g_name, height=300, template="plotly_dark", margin=dict(l=0,r=0,t=30,b=0))
                         st.plotly_chart(fig, use_container_width=True)
 
     # ==========================================
-    # PAGE 3: Historical Analysis
+    # PAGE 3: Historical Analysis (レジーム比較)
     # ==========================================
     elif page == "3. Historical Analysis (過去比較)":
-        st.title("🕰️ Historical Regime & Forward Return")
+        st.title("🕰️ Historical Regime Alignment")
         c1, c2, c3 = st.columns(3)
-        target = c1.selectbox("分析指数", ["^GSPC (S&P 500)", "^DJI (Dow Jones)", "^NDX (Nasdaq 100)"])
-        ticker = target.split(" ")[0]
-        regimes = {"2022 Inflation Shock": "2022-01-03", "2008 Lehman Shock": "2008-09-15", "2000 Dot-com Bubble": "2000-03-24"}
-        past_ev = c2.selectbox("過去のレジーム(T=0)", list(regimes.keys()))
-        curr_ev = pd.to_datetime(c3.date_input("現在の比較起点(T=0)", pd.to_datetime("2024-01-01"))).tz_localize(None)
-        days_to_track = st.slider("比較する営業日数", 50, 500, 250)
-
-        if st.button("結論を算出"):
-            try:
-                d = yf.Ticker(ticker).history(start="1970-01-01")['Close']
-                d.index = pd.to_datetime(d.index).tz_localize(None)
-                p_idx = d.index.get_indexer([pd.to_datetime(regimes[past_ev])], method='nearest')[0]
-                c_idx = d.index.get_indexer([curr_ev], method='nearest')[0]
-                offset = int(days_to_track / 4)
-                p_slice = (d.iloc[max(0, p_idx - offset) : p_idx + days_to_track] / d.iloc[p_idx]) * 100
-                c_slice = (d.iloc[max(0, c_idx - offset) : c_idx + days_to_track] / d.iloc[c_idx]) * 100
-                
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=np.arange(-len(p_slice[:p_idx - max(0, p_idx - offset)]), len(p_slice) - len(p_slice[:p_idx - max(0, p_idx - offset)])), y=p_slice.values, name=f"Past: {past_ev}", line=dict(dash='dash', color='gray')))
-                fig.add_trace(go.Scatter(x=np.arange(-len(c_slice[:c_idx - max(0, c_idx - offset)]), len(c_slice) - len(c_slice[:c_idx - max(0, c_idx - offset)])), y=c_slice.values, name=f"Current", line=dict(width=3, color='#ff4b4b')))
-                fig.update_layout(title=f"{ticker} Regime Alignment", height=400, template="plotly_dark")
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception as e: st.error(e)
-
-    # ==========================================
-    # PAGE 4: Investment Strategy (乖離分析セクション追加版)
-    # ==========================================
-    elif page == "4. Investment Strategy":
-        st.title("🧭 Professional Investment Strategy & AI Predictor")
+        target = c1.selectbox("分析指数", ["^GSPC", "^DJI", "^NDX"])
+        regimes = {"2022 Inflation": "2022-01-03", "2008 Lehman": "2008-09-15", "2000 IT Bubble": "2000-03-24"}
+        past_ev = c2.selectbox("過去のレジーム", list(regimes.keys()))
+        curr_ev = pd.to_datetime(c3.date_input("現在の起点", pd.to_datetime("2024-01-01")))
         
-        # --- (中略：データ取得・モデル学習ロジックは前回と同じ) ---
-        with st.spinner('クオンツモデルを構築中...'):
+        if st.button("軌跡を比較"):
+            d = yf.Ticker(target).history(start="1970-01-01")['Close']
+            d.index = pd.to_datetime(d.index).tz_localize(None)
+            p_idx = d.index.get_indexer([pd.to_datetime(regimes[past_ev])], method='nearest')[0]
+            c_idx = d.index.get_indexer([curr_ev], method='nearest')[0]
+            p_s = (d.iloc[p_idx-20 : p_idx+200] / d.iloc[p_idx]) * 100
+            c_s = (d.iloc[c_idx-20 : c_idx+200] / d.iloc[c_idx]) * 100
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=np.arange(-20, len(p_s)-20), y=p_s.values, name=past_ev, line=dict(dash='dash', color='gray')))
+            fig.add_trace(go.Scatter(x=np.arange(-20, len(c_s)-20), y=c_s.values, name="Current", line=dict(width=3, color='#ff4b4b')))
+            fig.update_layout(title="Regime Comparison (T=0: 100)", template="plotly_dark", height=500)
+            st.plotly_chart(fig, use_container_width=True)
+
+    # ==========================================
+    # PAGE 4: Investment Strategy (AI & 乖離分析)
+    # ==========================================
+    elif page == "4. Investment Strategy (AI分析)":
+        st.title("🧭 AI Strategy & Market Gap Analysis")
+        
+        with st.spinner('AIモデルを構築中...'):
             try:
-                # データの取得と特徴量生成
+                # データの取得と正規化
                 spy = yf.Ticker("SPY").history(period="10y")['Close'].rename("SPY")
                 vix = yf.Ticker("^VIX").history(period="10y")['Close'].rename("VIX")
                 dxy = yf.Ticker("DX-Y.NYB").history(period="10y")['Close'].rename("USD")
                 t10y2y = fred.get_series("T10Y2Y").rename("Yield_Curve")
                 hy = fred.get_series("BAMLH0A0HYM2").rename("HY_Spread")
                 
-                df_pro = pd.concat([spy, vix, dxy, t10y2y, hy], axis=1)
-                df_pro.index = pd.to_datetime(df_pro.index).tz_localize(None).normalize()
-                df_pro = df_pro.ffill().dropna()
+                series = [spy, vix, dxy, t10y2y, hy]
+                for s in series: s.index = pd.to_datetime(s.index).tz_localize(None).normalize()
+                df_ml = pd.concat(series, axis=1).ffill().dropna()
 
-                # 特徴量生成
-                df_pro['Mom_1m'] = df_pro['SPY'].pct_change(21)
-                df_pro['RSI'] = (df_pro['SPY'].diff().apply(lambda x: x if x > 0 else 0).rolling(14).mean() / 
-                                 df_pro['SPY'].diff().abs().rolling(14).mean()) * 100
-                df_pro['Vol_21d'] = df_pro['SPY'].pct_change().rolling(21).std() * np.sqrt(252)
-                df_pro['Stock_Bond_Corr'] = df_pro['SPY'].rolling(63).corr(df_pro['Yield_Curve'])
-                df_pro['Target_Return'] = df_pro['SPY'].pct_change(21).shift(-21)
+                # 特徴量エンジニアリング
+                df_ml['Mom'] = df_ml['SPY'].pct_change(21)
+                df_ml['Vol'] = df_ml['SPY'].pct_change().rolling(21).std() * np.sqrt(252)
+                df_ml['Target'] = df_ml['SPY'].pct_change(21).shift(-21)
                 
-                features = ['VIX', 'USD', 'Yield_Curve', 'HY_Spread', 'Mom_1m', 'RSI', 'Vol_21d', 'Stock_Bond_Corr']
-                df_train = df_pro.dropna()
-                X = df_train[features]
-                y = df_train['Target_Return']
+                features = ['VIX', 'USD', 'Yield_Curve', 'HY_Spread', 'Mom', 'Vol']
+                df_train = df_ml.dropna()
+                X, y = df_train[features], df_train['Target']
                 
-                # 重み付け学習 (最新トレンド重視)
+                # 重み付け学習 (直近重視)
                 weights = np.exp(np.linspace(-1, 0, len(X)))
-                model = RandomForestRegressor(n_estimators=200, max_depth=10, random_state=42)
-                model.fit(X, y, sample_weight=weights)
+                model = RandomForestRegressor(n_estimators=100, random_state=42).fit(X, y, sample_weight=weights)
                 
-                # 未来予測
-                latest_x = df_pro[features].iloc[-1:]
-                pred_return = model.predict(latest_x)[0] * 100
-                pred_price = df_pro['SPY'].iloc[-1] * (1 + (pred_return / 100))
+                latest_x = df_ml[features].iloc[-1:]
+                pred_ret = model.predict(latest_x)[0] * 100
                 
-            except Exception as e:
-                st.error(f"Error: {e}")
+                # --- 乖離分析セクション ---
+                st.subheader("1. Market vs AI Gap Analysis")
+                col_g1, col_g2 = st.columns([2, 1])
+                with col_g1:
+                    test_df = df_ml.tail(60).copy()
+                    test_df['AI_Fair'] = (model.predict(test_df[features]) + 1) * test_df['SPY']
+                    fig_g = go.Figure()
+                    fig_g.add_trace(go.Scatter(x=test_df.index, y=test_df['SPY'], name="Market", line=dict(color='#ff4b4b', width=2)))
+                    fig_g.add_trace(go.Scatter(x=test_df.index, y=test_df['AI_Fair'], name="AI Theoretical", line=dict(dash='dot', color='#58a6ff')))
+                    fig_g.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=20,b=0))
+                    st.plotly_chart(fig_g, use_container_width=True)
+                with col_g2:
+                    gap = ((df_ml['SPY'].iloc[-1] - test_df['AI_Fair'].iloc[-1]) / test_df['AI_Fair'].iloc[-1]) * 100
+                    st.metric("市場の乖離率 (vs AI理論値)", f"{gap:+.2f}%")
+                    if gap > 2: st.warning("⚠️ 市場はマクロ理論値を超えて過熱中")
+                    elif gap < -2: st.success("✅ 市場はマクロ的に割安圏内")
+                    else: st.info("⚖️ 適正水準を維持")
 
-        # --- 🆕 追加セクション: Market vs AI Gap Analysis ---
-        st.markdown("---")
-        st.subheader("分析 1: Market vs AI Gap Analysis (理論と現実の乖離)")
-        
-        col_gap1, col_gap2 = st.columns([2, 1])
-        
-        with col_gap1:
-            # 直近20日間の「市場価格」と「AIの理論上の予測価格」の推移を比較
-            test_df = df_pro.tail(40).copy()
-            # 過去の各時点での特徴量から「当時のAI予測」を算出（リプレイ）
-            test_features = test_df[features]
-            test_df['AI_Fair_Value'] = model.predict(test_features) * test_df['SPY'] + test_df['SPY']
-            
-            fig_gap = go.Figure()
-            fig_gap.add_trace(go.Scatter(x=test_df.index, y=test_df['SPY'], name="Market Price (市場価格)", line=dict(color='#ff4b4b', width=3)))
-            fig_gap.add_trace(go.Scatter(x=test_df.index, y=test_df['AI_Fair_Value'], name="AI Theoretical Value (AI理論値)", line=dict(color='#58a6ff', dash='dot')))
-            
-            fig_gap.update_layout(title="市場価格 vs AI適正水準の推移", template="plotly_dark", height=350, margin=dict(l=0,r=0,t=40,b=0))
-            st.plotly_chart(fig_gap, use_container_width=True)
-
-        with col_gap2:
-            # 乖離率(Spread)の計算
-            current_actual = df_pro['SPY'].iloc[-1]
-            gap_pct = ((current_actual - test_df['AI_Fair_Value'].iloc[-1]) / test_df['AI_Fair_Value'].iloc[-1]) * 100
-            
-            st.metric(label="理論値からの乖離率 (Spread)", value=f"{gap_pct:+.2f}%")
-            
-            if gap_pct > 3:
-                st.warning("⚠️ **Euphoria (過熱):** 市場がAIの論理を超えて買われています。短期的な調整、または『踏み上げ』のサインです。")
-            elif gap_pct < -3:
-                st.success("✅ **Undervalued (割安):** マクロ指標に比べて売られすぎ。リバウンドの好機かもしれません。")
-            else:
-                st.info("⚖️ **Fair (適正):** 市場はマクロ指標を適正に織り込んでいます。")
-
-        # --- 統合投資判断と戦略案 (前回同様) ---
-        st.markdown("---")
-        st.subheader("分析 2: 統合投資判断 (Executive Summary)")
-        # --- 統合ダッシュボードレイアウト ---
-        col_main, col_sub = st.columns([2, 1])
-
-        with col_main:
-            st.markdown("### 🏹 総合投資判断 (Executive Summary)")
-            
-            # 判断ロジック
-            vix_now = df_pro['VIX'].iloc[-1]
-            hy_now = df_pro['HY_Spread'].iloc[-1]
-            rsi_now = df_pro['RSI'].iloc[-1]
-            
-            # スコアリング算出
-            ai_score = np.clip(pred_return * 2, -5, 5)
-            macro_score = (1 if hy_now < 4 else -1) + (1 if vix_now < 20 else -1)
-            total_score = ai_score + macro_score
-            
-            if total_score > 3:
-                status, color, icon = "積極的投資 (Aggressive)", "#00ff00", "🚀"
-            elif total_score > 0:
-                status, color, icon = "部分的投資 (Cautious Long)", "#58a6ff", "⚖️"
-            else:
-                status, color, icon = "防御的待機 (Defensive/Cash)", "#f85149", "🛡️"
-
-            st.markdown(f"""
-            <div style="background-color:#161b22; padding:20px; border-radius:10px; border-left:10px solid {color};">
-                <h2 style="color:{color};">{icon} {status}</h2>
-                <p style="font-size:18px;"><b>AI予測 1ヶ月期待リターン:</b> {pred_return:+.2f}%</p>
-                <p><b>現在のマクロ環境:</b> {'健全' if hy_now < 4 else 'ストレス増大'} (HY Spread: {hy_now:.2f}%)</p>
-                <p><b>テクニカル過熱度:</b> {'過熱感あり' if rsi_now > 70 else '調整済み' if rsi_now < 30 else '中立'} (RSI: {rsi_now:.1f})</p>
-            </div>
-            """, unsafe_allow_html=True)
-
-            st.markdown("#### 🧠 AIの判断根拠 (Model Insights)")
-            imp = pd.DataFrame({'feature': features, 'importance': model.feature_importances_}).sort_values('importance')
-            fig_imp = px.bar(imp, x='importance', y='feature', orientation='h', template="plotly_dark", 
-                             color='importance', color_continuous_scale='Blues')
-            fig_imp.update_layout(height=300, margin=dict(l=0,r=0,t=20,b=0))
-            st.plotly_chart(fig_imp, use_container_width=True)
-
-        with col_sub:
-            st.markdown("### 📊 推奨ポジション比率")
-            risk_budget = max(0, min(100, (1 / vix_now) * 1500))
-            if pred_return < 0: risk_budget *= 0.5
-            
-            fig_gauge = go.Figure(go.Indicator(
-                mode = "gauge+number",
-                value = risk_budget,
-                title = {'text': "推奨リスク露出度 (%)"},
-                gauge = {
-                    'axis': {'range': [0, 100]},
-                    'bar': {'color': color},
-                    'steps': [{'range': [0, 50], 'color': "#333"}, {'range': [50, 100], 'color': "#444"}]
-                }
-            ))
-            fig_gauge.update_layout(height=250, template="plotly_dark", margin=dict(l=20,r=20,t=40,b=20))
-            st.plotly_chart(fig_gauge, use_container_width=True)
-
-            st.markdown("#### 📝 具体的な戦略案")
-            if status == "積極的投資 (Aggressive)":
-                st.write("・SPYへのロングポジションを構築。\n・強気トレンドが維持されているため、押し目買いを継続。\n・ボラティリティ低下によるガンマショート戦略も検討。")
-            elif status == "部分的投資 (Cautious Long)":
-                st.write("・主力株の比率を抑え、ディフェンシブセクターを混合。\n・ボラティリティの急増に備え、プットオプションでのヘッジを推奨。")
-            else:
-                st.write("・現金を主体とし、嵐が過ぎるのを待つ。\n・VIX指数のスパイクを確認してから打診買いを検討。\n・ショートポジションまたはベアETFの活用を検討。")
+                # --- 統合戦略判断 ---
+                st.markdown("---")
+                st.subheader("2. Executive Strategy Decision")
+                c_main, c_sub = st.columns([2, 1])
                 
+                with c_main:
+                    score = np.clip(pred_ret * 2, -5, 5) + (1 if hy.iloc[-1] < 4 else -1)
+                    if score > 2: status, color, icon = "積極的投資", "#00ff00", "🚀"
+                    elif score > -1: status, color, icon = "部分的投資", "#58a6ff", "⚖️"
+                    else: status, color, icon = "防御的待機", "#f85149", "🛡️"
+                    
+                    st.markdown(f"""
+                    <div style="border-left:10px solid {color}; background:#161b22; padding:20px; border-radius:10px;">
+                        <h2 style="color:{color};">{icon} {status}</h2>
+                        <p>AI予測 1ヶ月リターン: <b>{pred_ret:+.2f}%</b></p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with c_sub:
+                    risk = max(0, min(100, (1/vix.iloc[-1])*1500))
+                    st.plotly_chart(go.Figure(go.Indicator(mode="gauge+number", value=risk, title={'text':"推奨露出度"}, gauge={'axis':{'range':[0,100]}, 'bar':{'color':color}})).update_layout(height=250, template="plotly_dark", margin=dict(t=50,b=0)), use_container_width=True)
+
+                st.markdown("#### 📝 具体的な戦略案")
+                if score > 2: st.write("・SPYロング継続。モメンタム追随。\n・押し目があれば積極的に追加建玉。")
+                elif score > -1: st.write("・比率を半分に抑え、ヘッジを検討。\n・セクター選別を強化（ディフェンシブ混合）。")
+                else: st.write("・現金化を優先。ボラティリティ低下を待つ。\n・プット購入による下落プロテクトを推奨。")
+
+            except Exception as e: st.error(f"分析エラー: {e}")
+
+except Exception as e:
+    st.error(f"System Critical Error: {e}")
