@@ -1,8 +1,9 @@
 streamlit
 pandas
-fredapi
-plotly
 yfinance
-numpy
+plotly
+fredapi
 dbnomics
 scikit-learn
+scipy
+numpy
