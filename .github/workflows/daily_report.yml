@@ -1,1 +1,29 @@
+name: Daily Quant Report Generator
 
+on:
+  schedule:
+    - cron: '0 22 * * *' # 毎日 日本時間の朝7時（UTCの夜22時）に実行
+  workflow_dispatch: # 手動実行ボタン
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: pip install yfinance fredapi pandas google-generativeai
+
+    - name: Run Auto Report Script
+      env:
+        FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+        GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+      run: python auto_report.py
