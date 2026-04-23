@@ -8,7 +8,8 @@ import yfinance as yf
 import numpy as np
 from dbnomics import fetch_series
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
+import warnings
+warnings.filterwarnings('ignore')
 
 # --- ページ設定 ---
 st.set_page_config(page_title="Macro Quant Terminal", layout="wide", initial_sidebar_state="expanded")
@@ -48,12 +49,10 @@ try:
     ])
 
     # ==========================================
-    # PAGE 1: Market Dynamics (資金循環と需給)
+    # PAGE 1: Market Dynamics
     # ==========================================
     if page == "1. Market Dynamics (現在)":
         st.title("📈 Market Dynamics & Capital Rotation")
-        
-        # 1. 225225風 マーケットボード
         st.markdown("### ⚡ Real-time Market Board")
         board_cols = st.columns(5)
         count = 0
@@ -71,29 +70,19 @@ try:
                 except: pass
         
         st.markdown("---")
-        
-        # 2. セクター・ローテーション（資金の逃避先を解析）
         st.markdown("### 🔄 US Sector Rotation (1-Month Momentum)")
-        st.markdown("米国株の11セクターの直近1ヶ月のパフォーマンスから、現在の「リスクオン・オフ」の傾きを解析します。")
         with st.spinner('セクターパフォーマンスを取得中...'):
             try:
-                sectors = {
-                    'XLK': '情報技術', 'XLF': '金融', 'XLV': 'ヘルスケア', 'XLY': '一般消費財', 
-                    'XLC': '通信', 'XLI': '資本財', 'XLP': '生活必需品', 'XLE': 'エネルギー', 
-                    'XLU': '公益事業', 'XLRE': '不動産', 'XLB': '素材'
-                }
-                sector_data = yf.download(list(sectors.keys()), period="1mo")['Close']
+                sectors = {'XLK': '情報技術', 'XLF': '金融', 'XLV': 'ヘルスケア', 'XLY': '一般消費財', 'XLC': '通信', 'XLI': '資本財', 'XLP': '生活必需品', 'XLE': 'エネルギー', 'XLU': '公益事業', 'XLRE': '不動産', 'XLB': '素材'}
+                sector_data = yf.download(list(sectors.keys()), period="1mo", progress=False)['Close']
                 perf = ((sector_data.iloc[-1] / sector_data.iloc[0]) - 1) * 100
                 perf_df = pd.DataFrame({'Sector': [sectors[tic] for tic in perf.index], 'Performance (%)': perf.values}).sort_values(by='Performance (%)', ascending=True)
-                
                 fig_sec = px.bar(perf_df, x='Performance (%)', y='Sector', orientation='h', color='Performance (%)', color_continuous_scale='RdYlGn')
                 fig_sec.update_layout(height=400, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0))
                 st.plotly_chart(fig_sec, use_container_width=True)
-            except Exception as e: st.warning("セクターデータの取得をスキップしました。")
+            except: st.warning("セクターデータの取得をスキップしました。")
 
         st.markdown("---")
-        
-        # 3. CTA & Options
         st.markdown("### 🛡️ Positioning & Options")
         c1, c2 = st.columns(2)
         cta_opts = settings_df[settings_df['ソース'].isin(['CTA', 'Options'])]
@@ -133,27 +122,25 @@ try:
                     except: pass
 
     # ==========================================
-    # PAGE 2: Macro Economics (深層と相関)
+    # PAGE 2: Macro Economics
     # ==========================================
     elif page == "2. Macro Economics (深層)":
         st.title("🏛️ Macro Economic Analysis (PhD Level)")
         
-        # 1. クロスアセット相関マトリックス
-        st.markdown("### 🔗 Cross-Asset Correlation Matrix (1 Year)")
-        st.markdown("株、債券、為替、コモディティの直近1年間の相関関係（連動性）をヒートマップで可視化します。教科書通りの逆相関（株と債券など）が崩れている場合、マクロの潮目が変わっています。")
-        with st.spinner('相関マトリックスを計算中...'):
+        # ▼ スイングトレード特化：直近1週間の1時間足相関マトリックス
+        st.markdown("### 🔗 Cross-Asset Correlation Matrix (1 Week / 1H Interval)")
+        st.markdown("スイングトレード向けに解像度を上げ、**直近1週間の「1時間足」**を用いた精密な相関関係を可視化します。短期的な資金逃避や連動性の崩れを察知します。")
+        with st.spinner('スイング用・高解像度相関データを計算中...'):
             try:
-                assets = {'SPY': 'S&P500(株)', 'TLT': '米国債20年(債券)', 'GLD': 'ゴールド(金)', 'USO': '原油', 'UUP': 'ドル指数', '^VIX': 'VIX(恐怖)'}
-                corr_data = yf.download(list(assets.keys()), period="1y")['Close'].rename(columns=assets)
+                assets = {'SPY': 'S&P500', 'TLT': '米国債20年', 'GLD': 'ゴールド', 'USO': '原油', 'UUP': 'ドル指数', '^VIX': 'VIX'}
+                corr_data = yf.download(list(assets.keys()), period="1wk", interval="1h", progress=False)['Close'].rename(columns=assets)
                 corr_matrix = corr_data.corr()
                 fig_corr = go.Figure(data=go.Heatmap(z=corr_matrix.values, x=corr_matrix.columns, y=corr_matrix.columns, colorscale='RdBu', zmin=-1, zmax=1))
                 fig_corr.update_layout(height=400, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0))
                 st.plotly_chart(fig_corr, use_container_width=True)
-            except Exception as e: st.warning("相関データの計算をスキップしました。")
+            except Exception as e: st.warning(f"相関データの計算に失敗しました（時間外等の理由）: {e}")
 
         st.markdown("---")
-        st.markdown("### 📊 Macro Indicators Time-Series")
-
         tabs_names = [t for t in settings_df['タブ名'].unique() if t not in ['オプション動向', 'CTAトレンド']]
         tabs = st.tabs(tabs_names)
         for i, t_name in enumerate(tabs_names):
@@ -214,50 +201,15 @@ try:
             except Exception as e: st.error(e)
 
     # ==========================================
-    # PAGE 4: ML Investment Plan (機械学習予測)
+    # PAGE 4: ML Investment Plan & Backtesting
     # ==========================================
     elif page == "4. ML Investment Plan (投資計画)":
-        st.title("🤖 ML Price Prediction & Asset Allocation")
+        st.title("🤖 ML Price Prediction & Strategy Backtesting")
         
-        # --- セクション1: マクロ・レジーム判定 ---
-        st.markdown("### 1. Macro Regime Asset Allocation")
-        with st.spinner('マクロ環境を解析中...'):
+        # --- セクション1: ランダムフォレスト学習と予測 ---
+        st.markdown("### 1. Random Forest Forward Prediction")
+        with st.spinner('特徴量生成とAIの学習・バックテストを実行中...'):
             try:
-                sp500 = yf.Ticker("^GSPC").history(period="1y")['Close']
-                growth_momentum = (sp500.iloc[-1] / sp500.iloc[-126] - 1) * 100 
-                cpi = fred.get_series('CPIAUCSL').dropna()
-                inflation_momentum = (cpi.iloc[-1] / cpi.iloc[-7] - 1) * 100
-
-                if growth_momentum > 0 and inflation_momentum > 0:
-                    regime, desc = "Overheating (オーバーヒート)", "成長とインフレが共存。金融引き締めに警戒。"
-                    portfolio, color_scheme = {"株式 (VTI)": 40, "コモディティ (DBC)": 30, "金 (GLD)": 15, "短期債・現金": 15}, ['#ff4b4b', '#ffa500', '#ffd700', '#808080']
-                elif growth_momentum < 0 and inflation_momentum > 0:
-                    regime, desc = "Stagflation (スタグフレーション)", "成長鈍化とインフレが併存。現金と実物資産へ避難。"
-                    portfolio, color_scheme = {"金 (GLD)": 30, "コモディティ (DBC)": 20, "短期債・現金": 40, "株式 (VTI)": 10}, ['#ffd700', '#ffa500', '#808080', '#ff4b4b']
-                elif growth_momentum > 0 and inflation_momentum < 0:
-                    regime, desc = "Goldilocks (ゴルディロックス)", "インフレが落ち着き成長が続く適温相場。株へ全力投球。"
-                    portfolio, color_scheme = {"株式 (VTI/QQQ)": 60, "長期国債 (TLT)": 30, "社債 (LQD)": 10, "現金": 0}, ['#3fb950', '#58a6ff', '#8a2be2', '#000000']
-                else:
-                    regime, desc = "Deflation / Recession (デフレ・景気後退)", "インフレ鎮静と景気後退。中央銀行の利下げに備え長期債を選好。"
-                    portfolio, color_scheme = {"長期国債 (TLT)": 50, "短期債・現金": 30, "ディフェンシブ株": 10, "金 (GLD)": 10}, ['#58a6ff', '#808080', '#3fb950', '#ffd700']
-
-                col1, col2 = st.columns([1.5, 1])
-                with col1:
-                    st.info(f"**判定:** {regime}\n\n{desc}")
-                    fig_pie = go.Figure(data=[go.Pie(labels=list(portfolio.keys()), values=list(portfolio.values()), hole=.4, marker=dict(colors=color_scheme))])
-                    fig_pie.update_layout(template="plotly_dark", height=280, margin=dict(t=0, b=0, l=0, r=0))
-                    st.plotly_chart(fig_pie, use_container_width=True)
-            except Exception as e: st.error(f"レジーム判定エラー: {e}")
-
-        st.markdown("---")
-
-        # --- セクション2: ランダムフォレストによる予測モデル ---
-        st.markdown("### 2. Random Forest Price Prediction (1-Month Forward)")
-        st.markdown("ランダムフォレスト（アンサンブル学習）を利用し、マクロ変数間の**非線形な関係性**から 21営業日（約1ヶ月）後 のS&P 500の予測値と、現在市場を支配している要因（Feature Importance）を導き出します。")
-        
-        with st.spinner('ランダムフォレスト・モデルを学習・評価中...'):
-            try:
-                # データの取得 (10年分の学習データで精度を高める)
                 spy = yf.Ticker("SPY").history(period="10y")['Close'].rename("SPY")
                 vix = yf.Ticker("^VIX").history(period="10y")['Close'].rename("VIX")
                 dxy = yf.Ticker("DX-Y.NYB").history(period="10y")['Close'].rename("Dollar_Index")
@@ -265,50 +217,87 @@ try:
                 hy = fred.get_series("BAMLH0A0HYM2").rename("HY_Spread")
                 breakeven = fred.get_series("T10YIE").rename("Inflation_Expectation")
 
-                # データの結合と前処理
-                df_ml = pd.concat([spy, vix, dxy, t10y2y, hy, breakeven], axis=1).fillna(method='ffill').dropna()
+                df_ml = pd.concat([spy, vix, dxy, t10y2y, hy, breakeven], axis=1).fillna(method='ffill')
                 
-                # 目的変数の作成 (21日先のSPY価格)
+                # 特徴量エンジニアリング
+                df_ml['SPY_Ret_1m'] = df_ml['SPY'].pct_change(21) * 100
+                df_ml['VIX_SMA20'] = df_ml['VIX'].rolling(20).mean()
+                df_ml['Yield_Curve_Mom'] = df_ml['Yield_Curve'].diff(21)
+                df_ml['HY_Spread_Mom'] = df_ml['HY_Spread'].diff(21)
+                
+                # ターゲット（21日後の価格）
                 df_ml['Target_SPY'] = df_ml['SPY'].shift(-21)
                 df_train = df_ml.dropna()
                 
-                features = ['SPY', 'VIX', 'Dollar_Index', 'Yield_Curve', 'HY_Spread', 'Inflation_Expectation']
+                features = ['SPY', 'VIX', 'Dollar_Index', 'Yield_Curve', 'HY_Spread', 'Inflation_Expectation', 'SPY_Ret_1m', 'VIX_SMA20', 'Yield_Curve_Mom', 'HY_Spread_Mom']
                 X = df_train[features]
                 y = df_train['Target_SPY']
                 
-                # 直近のデータセットを分離（予測用）
-                latest_data = df_ml[features].iloc[-1:]
+                # ▼ バックテストのためのデータ分割（過去8割で学習、直近2割でテスト）
+                split_idx = int(len(X) * 0.8)
+                X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
+                y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
                 
-                # ランダムフォレストの構築と学習 (決定木100本)
+                # AIの学習（過去のデータのみを使用）
                 rf_model = RandomForestRegressor(n_estimators=100, random_state=42, max_depth=10)
-                rf_model.fit(X, y)
+                rf_model.fit(X_train, y_train)
                 
-                # 予測の実行
+                # 最新データによる1ヶ月後の予測
+                latest_data = df_ml[features].iloc[-1:]
                 current_price = latest_data['SPY'].values[0]
                 predicted_price = rf_model.predict(latest_data)[0]
                 predicted_return = ((predicted_price / current_price) - 1) * 100
 
-                # 結果の表示
-                st.write("#### 🤖 AI予測結果 (S&P 500 ETF: SPY)")
                 col_m1, col_m2, col_m3 = st.columns(3)
-                col_m1.metric(label="現在価格 (Current)", value=f"${current_price:.2f}")
-                col_m2.metric(label="1ヶ月後 AI予測価格 (Predicted)", value=f"${predicted_price:.2f}", delta=f"{predicted_return:.2f}%")
-                col_m3.metric(label="モデル決定係数 (R² Score)", value=f"{rf_model.score(X, y):.3f}")
+                col_m1.metric(label="現在価格 (Current SPY)", value=f"${current_price:.2f}")
+                col_m2.metric(label="1ヶ月後 AI予測価格", value=f"${predicted_price:.2f}", delta=f"{predicted_return:.2f}%")
+                col_m3.metric(label="現在のAIシグナル", value="BUY 🟢" if predicted_return > 0 else "CASH 🔴")
 
-                # 特徴量重要度の可視化（AIが何を重視して予測したか）
-                st.write("#### 🧠 AIの判断根拠 (Feature Importance)")
-                st.markdown("モデルが今後の株価を予測する上で、**現在どのマクロ変数を最も重視しているか**（影響度の割合）を示します。")
-                importances = rf_model.feature_importances_ * 100
-                imp_df = pd.DataFrame({'Feature': features, 'Importance (%)': importances}).sort_values(by='Importance (%)', ascending=True)
+                st.markdown("---")
                 
-                fig_imp = px.bar(imp_df, x='Importance (%)', y='Feature', orientation='h', color='Importance (%)', color_continuous_scale='Blues')
-                fig_imp.update_layout(height=300, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0))
-                st.plotly_chart(fig_imp, use_container_width=True)
+                # --- セクション2: 厳格なバックテスト（Out-of-Sample） ---
+                st.markdown("### 2. Strategy Backtesting (Out-of-Sample)")
+                st.markdown("AIがまだ見ていない**直近約2年間の未知の相場**において、「AIがプラスリターンを予測した日だけS&P500を保有（ロング）、マイナス予測の日は現金化（キャッシュ）」というスイング戦略を行った場合の資産推移です。")
                 
-                st.caption("※ 免責事項: 本機械学習モデルは過去10年間のマクロデータに基づく統計的予測であり、将来の価格やリターンを保証するものではありません。")
+                # 未知の相場に対するAIの予測
+                bt_predictions = rf_model.predict(X_test)
+                bt_df = pd.DataFrame(index=X_test.index)
+                bt_df['Actual_Price'] = X_test['SPY']
+                bt_df['Predicted_Price'] = bt_predictions
+                bt_df['Expected_Return'] = (bt_df['Predicted_Price'] / bt_df['Actual_Price']) - 1
+                
+                # シグナル生成 (期待リターンが > 0 なら ロング(1)、<= 0 なら 現金(0))
+                bt_df['Signal'] = np.where(bt_df['Expected_Return'] > 0, 1, 0)
+                
+                # 毎日のリターン計算
+                bt_df['Daily_Market_Return'] = bt_df['Actual_Price'].pct_change().shift(-1) # 翌日のリターンを獲得
+                bt_df['Daily_Strategy_Return'] = bt_df['Signal'] * bt_df['Daily_Market_Return']
+                
+                # 累積リターン (Base 100)
+                bt_df = bt_df.dropna()
+                bt_df['Market_Equity'] = (1 + bt_df['Daily_Market_Return']).cumprod() * 100
+                bt_df['Strategy_Equity'] = (1 + bt_df['Daily_Strategy_Return']).cumprod() * 100
+
+                # バックテスト結果のプロット
+                fig_bt = go.Figure()
+                fig_bt.add_trace(go.Scatter(x=bt_df.index, y=bt_df['Strategy_Equity'], name='AI Strategy (AI戦略)', line=dict(color='#3fb950', width=3)))
+                fig_bt.add_trace(go.Scatter(x=bt_df.index, y=bt_df['Market_Equity'], name='Buy & Hold (S&P500ガチホ)', line=dict(color='gray', dash='dash')))
+                
+                # AIが「現金化(キャッシュ)」を選んだ期間を背景色でハイライト
+                cash_periods = bt_df[bt_df['Signal'] == 0]
+                fig_bt.add_trace(go.Scatter(x=cash_periods.index, y=cash_periods['Strategy_Equity'], mode='markers', name='CASH (回避)', marker=dict(color='red', size=4)))
+                
+                fig_bt.update_layout(title="Backtest Results: AI Strategy vs Buy & Hold (Base 100)", xaxis_title="Date", yaxis_title="Portfolio Equity", template="plotly_dark", height=450, hovermode="x unified")
+                st.plotly_chart(fig_bt, use_container_width=True)
+                
+                # バックテスト統計
+                total_market_return = bt_df['Market_Equity'].iloc[-1] - 100
+                total_strategy_return = bt_df['Strategy_Equity'].iloc[-1] - 100
+                st.write(f"**テスト期間のトータルリターン:** AI戦略 `{total_strategy_return:.2f}%` vs S&P500 `{total_market_return:.2f}%`")
+                st.caption("※ AIが下落を察知して現金化（赤のドット）することで、市場の暴落（ドローダウン）をどれだけ回避できているかを確認してください。")
 
             except Exception as e:
-                st.error(f"機械学習モデルの計算エラー: 詳細を確認してください ({e})")
+                st.error(f"バックテストの計算エラー: {e}")
 
 except Exception as e:
     st.error(f"System Error: {e}")
