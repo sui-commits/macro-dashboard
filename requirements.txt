@@ -4,3 +4,4 @@ fredapi
 plotly
 yfinance
 numpy
+dbnomics
