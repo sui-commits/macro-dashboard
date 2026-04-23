@@ -2,12 +2,17 @@ name: Daily Quant Report Generator
 
 on:
   schedule:
-    - cron: '0 22 * * *' # 毎日 日本時間の朝7時（UTCの夜22時）に実行
-  workflow_dispatch: # 手動実行ボタン
+    - cron: '0 22 * * *'
+  workflow_dispatch:
+
+# ここにNode.js 24を強制する設定を追加！
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -18,7 +23,8 @@ jobs:
         python-version: '3.10'
 
     - name: Install dependencies
-      run: pip install yfinance fredapi pandas google-generativeai
+      run: |
+        pip install yfinance fredapi pandas google-generativeai
 
     - name: Run Auto Report Script
       env:
