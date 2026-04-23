@@ -237,7 +237,8 @@ try:
         st.markdown("マクロ経済、グローバル流動性、需給に特化した予測モデルを構築し、LLM解釈用のプロンプトを出力します。")
 
         with st.sidebar.expander("🛠️ モデル・パラメータ設定", expanded=True):
-            exclude_other_stocks = st.checkbox("他の株式指数を除外する (推奨)", value=True, help="QQQ, DIAなどの他指数を排除し、マクロと需給のみで説明します。")
+            indicator_mode = st.radio("📊 参照指標モード", ["先行指標のみ (Leading Focus)", "現在・一致指標を含む (All Macro)"], help="CPIや失業率などの一致・遅行指標を含めるか、先行指標に特化するかを選びます。")
+            exclude_other_stocks = st.checkbox("他の株式指数を除外する (推奨)", value=True)
             include_anomaly = st.checkbox("大統領選サイクルを含める", value=False)
             lookback_years = st.slider("学習期間 (年)", 3, 10, 5)
 
@@ -245,13 +246,18 @@ try:
             try:
                 target_ticker = "SPY"
                 
-                # --- 1 & 2. データの取得と結合 ---
                 yahoo_tickers = settings_df[settings_df['ソース'] == 'Yahoo']['ティッカー'].unique().tolist()
                 market_implied_tickers = ['HG=F', 'GC=F', 'XLY', 'XLP', '^VIX', '^VIX3M']
                 all_yahoo = list(set(yahoo_tickers + market_implied_tickers + [target_ticker]))
 
-                pro_fred_tickers = ['ANFCI', 'STLFSI4', 'T10Y3M', 'BAMLH0A0HYM2', 'WALCL', 'M2SL', 'ICSA', 'AWHAEMAN', 'T5YIFR', 'PERMIT', 'UMCSENT']
-                all_fred = list(set(settings_df[settings_df['ソース'] == 'FRED']['ティッカー'].unique().tolist() + pro_fred_tickers))
+                # 先行指標群
+                base_fred = ['ANFCI', 'STLFSI4', 'T10Y3M', 'BAMLH0A0HYM2', 'WALCL', 'M2SL', 'ICSA', 'AWHAEMAN', 'T5YIFR', 'PERMIT', 'UMCSENT']
+                
+                # 一致・遅行指標群（トグルで追加）
+                if "現在・一致指標" in indicator_mode:
+                    base_fred.extend(['CPIAUCSL', 'UNRATE', 'PAYEMS', 'INDPRO']) # CPI, 失業率, 非農業部門雇用者数, 鉱工業生産
+                
+                all_fred = list(set(settings_df[settings_df['ソース'] == 'FRED']['ティッカー'].unique().tolist() + base_fred))
 
                 series_list = []
                 y_data = yf.download(all_yahoo, period=f"{lookback_years}y", progress=False)['Close']
@@ -269,7 +275,6 @@ try:
                     series_list[i].index = pd.to_datetime(series_list[i].index).tz_localize(None).normalize()
                 df_ml = pd.concat(series_list, axis=1).ffill()
                 
-                # --- 3. 特徴量エンジニアリング ---
                 df_ml['CTA_200D_Bias'] = df_ml[target_ticker] / df_ml[target_ticker].rolling(200).mean() - 1
                 df_ml['Vol_Term_Spread'] = df_ml['^VIX'] / df_ml['^VIX3M']
                 df_ml['Copper_Gold_Ratio'] = df_ml['HG=F'] / df_ml['GC=F']
@@ -277,7 +282,6 @@ try:
                 df_ml['Target'] = df_ml[target_ticker].pct_change(21).shift(-21)
                 df_train = df_ml.dropna()
 
-                # --- 4. フィルタリング ---
                 drop_cols = ['Target', 'HG=F', 'GC=F', 'XLY', 'XLP', '^VIX', '^VIX3M']
                 if exclude_other_stocks:
                     stock_indices = [t for t in yahoo_tickers if t != target_ticker]
@@ -288,14 +292,12 @@ try:
                 features = [col for col in df_train.columns if col not in drop_cols]
                 X, y = df_train[features], df_train['Target']
                 
-                # 学習
                 weights = np.exp(np.linspace(-1, 0, len(X)))
                 model = RandomForestRegressor(n_estimators=200, max_depth=10, random_state=42).fit(X, y, sample_weight=weights)
                 
                 latest_x = df_ml[features].iloc[-1:]
                 pred_ret = model.predict(latest_x)[0] * 100
 
-                # Z-Score解析
                 df_3y = df_ml.tail(252*3)
                 macro_only = [f for f in features if f != 'Presidential_Cycle']
                 z_scores = (latest_x[macro_only].iloc[0] - df_3y[macro_only].mean()) / df_3y[macro_only].std()
@@ -304,7 +306,7 @@ try:
                 imp_df['Z_Score'] = imp_df['Feature'].map(z_scores).fillna(0)
                 imp_df = imp_df.sort_values('Importance', ascending=False).head(12)
 
-                # --- UI表示 ---
+                # --- UI Rendering ---
                 st.subheader("1. AI Interpretation: Feature Importance")
                 fig_brain = px.bar(imp_df.sort_values('Importance'), x='Importance', y='Feature', orientation='h',
                                    color='Z_Score', color_continuous_scale='RdBu_r', range_color=[-3, 3], template="plotly_dark")
@@ -331,45 +333,112 @@ try:
                     st.plotly_chart(go.Figure(go.Indicator(mode="gauge+number", value=risk, title={'text':"推奨リスク露出度"}, gauge={'bar':{'color':'#58a6ff'}})).update_layout(template="plotly_dark", height=200, margin=dict(t=30,b=0)), use_container_width=True)
 
                 # ==========================================
-                # 🤖 LLM解説プロンプトの動的生成
+                # 🤖 LLM解説プロンプト (アセットランキング対応)
                 # ==========================================
                 st.markdown("---")
-                st.subheader("🤖 LLM Analysis Prompt (言語化用プロンプト)")
-                st.markdown("以下のテキストをコピーして、GeminiやChatGPTに貼り付けてください。現在のデータを元に、プロのクオンツ目線で相場環境を解説してくれます。")
+                st.subheader("🤖 LLM Analysis Prompt (言語化＆アセットランキング)")
+                st.markdown("以下のテキストをコピーして、Gemini等に貼り付けてください。マクロ環境に基づいた5大アセットの期待値ランキングを生成します。")
 
                 top_features_text = ""
-                for _, row in imp_df.head(6).iterrows():
-                    top_features_text += f"- {row['Feature']}: 重要度 {row['Importance']:.4f}, 現在のZ-Score {row['Z_Score']:+.2f}\\n"
+                for _, row in imp_df.head(8).iterrows():
+                    top_features_text += f"- {row['Feature']}: 重要度 {row['Importance']:.4f}, 現在のZ-Score {row['Z_Score']:+.2f}\n"
 
-                anfci_val = df_ml['ANFCI'].iloc[-1] if 'ANFCI' in df_ml.columns else "データなし"
+                anfci_val = df_ml['ANFCI'].iloc[-1] if 'ANFCI' in df_ml.columns else 0.0
                 cycle_val = df_ml['Presidential_Cycle'].iloc[-1]
                 cycle_dict = {0: "選挙年", 1: "就任年", 2: "中間選挙年", 3: "選挙前年"}
 
                 llm_prompt = f"""あなたは世界トップクラスのマクロ・クオンツ・ファンドのシニア・ストラテジストです。
-以下の自社開発AIモデル（Random Forest）が出力した最新の算出結果を元に、現在の相場環境で「どのマクロ指標が支配的か」を言語化し、プロ目線の市場解説レポートを作成してください。
+自社開発AIが出力した最新のマクロ解析結果を元に、現在の相場環境を言語化し、主要アセットのアロケーション戦略を策定してください。
 
-【AIモデル分析結果 (対象: S&P500, スイングホライズン: 1ヶ月)】
-・AI予測 1ヶ月リターン: {pred_ret:+.2f}%
-・現在価格とAI適正価格の乖離率: {gap:+.2f}% (プラスなら相場が割高・過熱、マイナスなら割安)
-・現在のVIX (恐怖指数): {vix_val:.2f}
-・現在のANFCI (シカゴ連銀 金融環境指数): {anfci_val}
+【AIモデル分析結果 (対象: 米国株, ホライズン: 1ヶ月, モード: {indicator_mode})】
+・株式 1ヶ月予測リターン: {pred_ret:+.2f}%
+・株式市場の理論値乖離率: {gap:+.2f}% (プラス=割高, マイナス=割安)
+・VIX (恐怖指数): {vix_val:.2f}
+・ANFCI (金融環境指数): {anfci_val:.2f} (プラス=引き締め的, マイナス=緩和的)
 ・現在の大統領選サイクル: {cycle_dict.get(cycle_val, "不明")}
 
-【AIが重視している特徴量上位と、現在値のZ-Score (直近3年比の異常度)】
+【AIが重視している特徴量上位と現在値のZ-Score (直近3年比の異常度)】
 {top_features_text}
-※Z-Scoreが+2以上、または-2以下のものは、過去3年平均から大きく逸脱した「異常値」として相場を強く牽引・圧迫しています。
+※Z-Scoreが±2以上のものは、過去3年平均から大きく逸脱した「異常値」として相場を強く牽引・圧迫しています。
 
 【出力要件】
-1. 現在の市場を牽引（または圧迫）している主要なマクロ要因は何か？（特徴量のZ-Scoreの異常値を元に因果関係を考察してください）
-2. AIの適正価格との乖離(Spread)や、金融ストレス(ANFCI)を考慮した、現在の市場の「歪み」やリスク。
-3. クオンツ目線での、今後1ヶ月の具体的な投資スタンス（強気/弱気/中立）とアクションプラン。
-出力は、機関投資家のポートフォリオ・マネージャー宛てのレポートのような、論理的で洗練されたトーンにしてください。
+1. 現在の市場を牽引（または圧迫）している主要なマクロ要因は何か？（特徴量のZ-Scoreから因果関係をプロ目線で解説）
+2. 【最重要】「株」「債券」「キャッシュ」「原油」「金」の5つのアセットクラスについて、上記のマクロ環境（金融ストレス、VIX、異常値となっている指標）から論理的に推測し、今後1ヶ月でアウトパフォームする可能性が高い順に1位〜5位のランキングを作成してください。
+3. なぜその順位になったのか、各アセットに対してクオンツ的・マクロ的な明確な理由（例：実質金利の動向、信用収縮リスク、実需の強さ等）を付記してください。
 """
                 st.code(llm_prompt, language="text")
 
-            except Exception as e: 
-                st.error(f"分析エラー: {e}")
+            except Exception as e: st.error(f"分析エラー: {e}")
 
-# ===== ココが重要！システム全体を囲む try の except =====
+    # ==========================================
+    # PAGE 5: Headline Reverse-Engineering (追加)
+    # ==========================================
+    elif page == "5. Headline Reverse-Engineering (イベント逆引き)":
+        st.title("🗞️ Headline Reverse-Engineering")
+        st.markdown("株価が統計的な異常反応（3シグマ級の変動）を示した日を数学的に特定し、LLMを使ってその背景にあるニュースヘッドラインを逆引きします。")
+
+        lookback_months = st.slider("分析期間 (過去何ヶ月の異常値を調査するか)", 1, 12, 6)
+        
+        with st.spinner('市場の異常変動日を検出中...'):
+            try:
+                spy_data = yf.Ticker("SPY").history(period=f"{lookback_months}mo")['Close']
+                spy_ret = spy_data.pct_change().dropna() * 100
+                
+                # リターンのZスコアを計算 (異常値の特定)
+                mean_ret = spy_ret.mean()
+                std_ret = spy_ret.std()
+                z_scores = (spy_ret - mean_ret) / std_ret
+                
+                # 絶対値の変動が大きかった上位5日を抽出
+                top_moves = spy_ret.abs().nlargest(5).index
+                
+                # --- UI: チャート描画 ---
+                st.subheader("📊 Volatility Anomalies (ボラティリティ・アノマリーの検出)")
+                fig_events = go.Figure()
+                fig_events.add_trace(go.Scatter(x=spy_data.index, y=spy_data.values, name="SPY Price", line=dict(color='#c9d1d9', width=2)))
+                
+                # 異常変動日にマーカーを追加
+                for date in top_moves:
+                    ret_val = spy_ret.loc[date]
+                    color = '#00ff00' if ret_val > 0 else '#f85149'
+                    fig_events.add_trace(go.Scatter(
+                        x=[date], y=[spy_data.loc[date]],
+                        mode='markers+text',
+                        marker=dict(color=color, size=12, symbol='star'),
+                        text=[f"{ret_val:+.1f}%"], textposition="top center",
+                        name=f"Anomaly: {date.strftime('%Y-%m-%d')}"
+                    ))
+                st.plotly_chart(fig_events.update_layout(template="plotly_dark", height=400, showlegend=False), use_container_width=True)
+
+                # --- 逆引きプロンプトの生成 ---
+                st.markdown("---")
+                st.subheader("🤖 Headline Retrieval Prompt (ニュース逆引きプロンプト)")
+                st.markdown("以下のテキストをコピーしてGemini等に入力し、この異常変動を引き起こした**「マクロの引き金（トリガー）」**を特定させてください。")
+                
+                events_text = ""
+                for i, date in enumerate(top_moves, 1):
+                    events_text += f"{i}. {date.strftime('%Y年%m月%d日')}: SPY変動率 {spy_ret.loc[date]:+.2f}%\n"
+
+                llm_event_prompt = f"""あなたは金融市場の歴史とマクロ経済に精通したアナリストです。
+以下のリストは、過去{lookback_months}ヶ月間において、S&P500（SPY）が統計的に異常な変動（ボラティリティ・スパイク）を記録した上位5つの日付です。
+
+【異常変動を記録した日付とリターン】
+{events_text}
+
+【タスク】
+各日付について、その日または前日に発表された以下のいずれかの「マクロの引き金」をウェブ検索等で特定し、なぜ市場がこれほど激しく反応したのかを簡潔に解説してください。
+・重要な経済指標のサプライズ（CPI、雇用統計など）
+・中央銀行（FRB）の決定や要人発言
+・地政学的リスクや突発的なショック
+・主要な企業決算（NVIDIAなど市場全体を動かすもの）
+
+※各日付ごとに、見出しをつけて箇条書きで分かりやすく解説してください。
+"""
+                st.code(llm_event_prompt, language="text")
+
+            except Exception as e:
+                st.error(f"イベント特定エラー: {e}")
+
+# ===== システム全体を囲む try の except =====
 except Exception as e:
     st.error(f"System Critical Error: {e}")
