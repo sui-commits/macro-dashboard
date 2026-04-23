@@ -72,6 +72,29 @@ def fetch_market_data(tickers, period=None, start=None):
     except Exception as e:
         st.toast(f"データ取得エラー: {e}")
         return pd.DataFrame()
+        
+@st.cache_data(ttl=1800) # 30分間キャッシュしてYahooのブロックを回避
+def get_options_max_pain(ticker_symbol):
+    try:
+        tkr = yf.Ticker(ticker_symbol)
+        opt_dates = tkr.options
+        if len(opt_dates) == 0:
+            return None, None, None
+            
+        exp = opt_dates[0]
+        opt_chain = tkr.option_chain(exp)
+        c, p = opt_chain.calls, opt_chain.puts
+        
+        strikes = sorted(list(set(c['strike']).union(set(p['strike']))))
+        mp, min_l = 0, float('inf')
+        for s in strikes:
+            l = c[c['strike']<s].apply(lambda x:(s-x['strike'])*x['openInterest'], axis=1).sum() + p[p['strike']>s].apply(lambda x:(x['strike']-s)*x['openInterest'], axis=1).sum()
+            if l < min_l: min_l, mp = l, s
+            
+        curr_price = tkr.history(period="1d")['Close'].iloc[-1]
+        return exp, mp, curr_price
+    except Exception as e:
+        raise e
 
 # ==========================================
 # メイン処理開始
@@ -185,21 +208,12 @@ try:
         with c_opt:
             st.markdown(f"#### 🎯 {target_ticker} Options Max Pain Magnet")
             try:
-                tkr_opt = yf.Ticker(target_ticker)
-                opt_dates = tkr_opt.options
-                if len(opt_dates) == 0:
-                    st.warning("現在、Yahoo Financeからオプションデータが配信されていません。")
+                # キャッシュ化された安全な関数を呼び出す
+                exp, mp, curr_price = get_options_max_pain(target_ticker)
+                
+                if exp is None:
+                    st.warning("現在、Yahoo Financeからオプションデータが制限されています。")
                 else:
-                    exp = opt_dates[0]
-                    c, p = tkr_opt.option_chain(exp).calls, tkr_opt.option_chain(exp).puts
-                    strikes = sorted(list(set(c['strike']).union(set(p['strike']))))
-                    mp, min_l = 0, float('inf')
-                    for s in strikes:
-                        l = c[c['strike']<s].apply(lambda x:(s-x['strike'])*x['openInterest'], axis=1).sum() + p[p['strike']>s].apply(lambda x:(x['strike']-s)*x['openInterest'], axis=1).sum()
-                        if l < min_l: min_l, mp = l, s
-                        
-                    curr_price = tkr_opt.history(period="1d")['Close'].iloc[-1]
-                    
                     fig_gauge = go.Figure(go.Indicator(
                         mode = "gauge+number+delta",
                         value = curr_price,
@@ -213,8 +227,11 @@ try:
                     ))
                     fig_gauge.update_layout(template="plotly_dark", height=250, margin=dict(t=40, b=0, l=20, r=20))
                     st.plotly_chart(fig_gauge, use_container_width=True)
-            except Exception as e: st.error(f"オプションデータ処理エラー: {e}")
-
+            
+            except Exception as e: 
+                st.error(f"現在Yahoo APIのアクセス制限(Rate Limit)を受けています。")
+                st.info("💡 約30分〜1時間ほど放置すると自動的に制限が解除されます。")
+                
     # ==========================================
     # PAGE 2: Institutional Asset Class Macro
     # ==========================================
