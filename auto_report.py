@@ -27,7 +27,7 @@ def get_market_context():
 
 def generate_debate_report(context):
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-pro')
     
     prompt = f"""
     あなたはトップクオンツファンドの投資委員会です。以下のデータに基づきアロケーション（株、債券、金、現金）を議論してください。
