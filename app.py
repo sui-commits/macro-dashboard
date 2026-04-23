@@ -214,43 +214,43 @@ try:
                 st.plotly_chart(fig_cta, use_container_width=True)
                 st.info(f"**CTA Bias:** 価格は200日線から `{dist_200:+.1f}%` 乖離。トレンドフォロワーは現在 **{'強気 (Long)' if dist_200 > 0 else '弱気 (Short)'}** ポジションに偏っています。")
             except: pass
-with c_opt:
-    st.markdown("#### 🎯 SPY Options Wall & Net Gamma Proxy")
-    try:
-        spy_opt = yf.Ticker("SPY")
-        exp = spy_opt.options[0] # 直近の満期日
-        c, p = spy_opt.option_chain(exp).calls, spy_opt.option_chain(exp).puts
-        curr_price = spy['Close'].iloc[-1]
+        with c_opt:
+            st.markdown("#### 🎯 SPY Options Wall & Net Gamma Proxy")
+            try:
+                spy_opt = yf.Ticker("SPY")
+                exp = spy_opt.options[0] # 直近の満期日
+                c, p = spy_opt.option_chain(exp).calls, spy_opt.option_chain(exp).puts
+                curr_price = spy['Close'].iloc[-1]
         
         # 簡易Net Gamma Proxy (Call OI - Put OI) をストライクごとに計算
         # ※本来はグリークス(Gamma)が必要ですが、建玉の偏りで代用
-        df_c = c[['strike', 'openInterest']].rename(columns={'openInterest': 'Call_OI'})
-        df_p = p[['strike', 'openInterest']].rename(columns={'openInterest': 'Put_OI'})
-        df_oi = pd.merge(df_c, df_p, on='strike', how='outer').fillna(0)
-        df_oi['Net_OI'] = df_oi['Call_OI'] - df_oi['Put_OI']
+                df_c = c[['strike', 'openInterest']].rename(columns={'openInterest': 'Call_OI'})
+                df_p = p[['strike', 'openInterest']].rename(columns={'openInterest': 'Put_OI'})
+                df_oi = pd.merge(df_c, df_p, on='strike', how='outer').fillna(0)
+                df_oi['Net_OI'] = df_oi['Call_OI'] - df_oi['Put_OI']
         
         # 現在価格の上下10%のストライクに絞る
-        df_oi = df_oi[(df_oi['strike'] > curr_price * 0.9) & (df_oi['strike'] < curr_price * 1.1)]
+                df_oi = df_oi[(df_oi['strike'] > curr_price * 0.9) & (df_oi['strike'] < curr_price * 1.1)]
         
-        fig_gex = go.Figure()
-        fig_gex.add_trace(go.Bar(x=df_oi['strike'], y=df_oi['Net_OI'], 
-                                 marker_color=np.where(df_oi['Net_OI'] > 0, '#58a6ff', '#f85149'),
-                                 name='Net Exposure'))
-        fig_gex.add_vline(x=curr_price, line_dash="solid", line_color="yellow", annotation_text="Current Price")
+                fig_gex = go.Figure()
+                fig_gex.add_trace(go.Bar(x=df_oi['strike'], y=df_oi['Net_OI'], 
+                                         marker_color=np.where(df_oi['Net_OI'] > 0, '#58a6ff', '#f85149'),
+                                         name='Net Exposure'))
+                fig_gex.add_vline(x=curr_price, line_dash="solid", line_color="yellow", annotation_text="Current Price")
         
-        fig_gex.update_layout(template="plotly_dark", height=250, margin=dict(t=30, b=0, l=0, r=0),
-                              title=f"Dealer Exposure Proxy (Exp: {exp})", barmode='relative')
-        st.plotly_chart(fig_gex, use_container_width=True)
+                fig_gex.update_layout(template="plotly_dark", height=250, margin=dict(t=30, b=0, l=0, r=0),
+                                      title=f"Dealer Exposure Proxy (Exp: {exp})", barmode='relative')
+                st.plotly_chart(fig_gex, use_container_width=True)
         
         # 解釈の表示
-        net_total = df_oi['Net_OI'].sum()
-        if net_total > 0:
-            st.info("✅ **Long Gamma Regime:** コール建玉が優勢。ディーラーの逆張りヘッジにより、相場の変動率（ボラティリティ）は抑えられやすい環境です。")
-        else:
-            st.error("⚠️ **Short Gamma Regime:** プット建玉が優勢。ディーラーの順張りヘッジ（売られたら売る）により、暴落が加速しやすい危険な環境です。")
+                net_total = df_oi['Net_OI'].sum()
+                if net_total > 0:
+                    st.info("✅ **Long Gamma Regime:** コール建玉が優勢。ディーラーの逆張りヘッジにより、相場の変動率（ボラティリティ）は抑えられやすい環境です。")
+                else:
+                    st.error("⚠️ **Short Gamma Regime:** プット建玉が優勢。ディーラーの順張りヘッジ（売られたら売る）により、暴落が加速しやすい危険な環境です。")
             
-    except Exception as e: 
-        st.toast(f"オプションデータの処理に失敗: {e}")
+            except Exception as e: 
+                st.toast(f"オプションデータの処理に失敗: {e}")
 
     # ==========================================
     # PAGE 2: Institutional Asset Class Macro
