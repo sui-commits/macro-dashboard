@@ -48,4 +48,4 @@ try:
                     st.error(f"{name} のデータが取得できませんでした。")
                     
 except Exception as e:
-    st.error("スプレッドシートの読み込みに失敗しました。URLを確認してください。")
+    st.error(f"エラーの詳細: {e}")
