@@ -15,11 +15,11 @@ GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
 
 def get_market_context():
     spy = yf.download(["SPY", "^VIX"], period="1mo", progress=False)['Close']
-    curr_vix = spy['^VIX'].iloc[-1]
-    spy_ret = (spy['SPY'].iloc[-1] / spy['SPY'].iloc[0] - 1) * 100
+    curr_vix = float(spy['^VIX'].iloc[-1])
+    spy_ret = float((spy['SPY'].iloc[-1] / spy['SPY'].iloc[0] - 1) * 100)
     
     fred = Fred(api_key=FRED_API_KEY)
-    t10y3m = fred.get_series('T10Y3M').dropna().iloc[-1]
+    t10y3m = float(fred.get_series('T10Y3M').dropna().iloc[-1])
     
     regime = "🟢 Normal (Risk-On)" if curr_vix < 20 else "🔴 Crisis (Risk-Off)"
     
@@ -27,7 +27,20 @@ def get_market_context():
 
 def generate_debate_report(context):
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-pro')
+    
+    # 【追加機能】Googleのサーバーに直接アクセスし、現在使えるモデルを自動検索する
+    target_model = None
+    for m in genai.list_models():
+        if 'generateContent' in m.supported_generation_methods:
+            target_model = m.name
+            if 'flash' in target_model.lower(): # 高速モデルが見つかれば優先
+                break
+                
+    if not target_model:
+        return "エラー: 利用可能なGeminiモデルが見つかりませんでした。"
+        
+    print(f"使用モデル: {target_model}")
+    model = genai.GenerativeModel(target_model)
     
     prompt = f"""
     あなたはトップクオンツファンドの投資委員会です。以下のデータに基づきアロケーション（株、債券、金、現金）を議論してください。
