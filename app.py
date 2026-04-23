@@ -216,11 +216,189 @@ try:
             except Exception as e: st.error(f"オプションデータ処理エラー: {e}")
 
     # ==========================================
-    # PAGE 2 & 3: Asset Class & Historical Analog (要約表示)
+    # PAGE 2: Institutional Asset Class Macro
     # ==========================================
-    elif page in ["2. Asset Class Macro (アセット別分析)", "3. Historical Analysis (過去比較)"]:
-        st.info("GitHub移行用のテンプレートコードです。PAGE 2とPAGE 3のロジックは先ほどの完全版からコピペして利用可能です（文字数制限のため短縮しています）。")
+    elif page == "2. Asset Class Macro (アセット別分析)":
+        st.title("🏦 Institutional Asset Class Macro")
+        st.markdown("ローリング相関、Z-Score標準化、およびマクロ乖離シグナルを用いて、グローバルアセットの根源的な力学を解析します。")
 
+        st.subheader("1. Cross-Asset Regime Monitor (Rolling Correlation)")
+        with st.spinner("Calculating Rolling Correlations..."):
+            try:
+                assets = {'SPY':'Stocks (S&P500)', 'TLT':'Bonds (20Y+)', 'GLD':'Gold', 'USO':'Oil', 'UUP':'US Dollar'}
+                close_data = fetch_market_data(list(assets.keys()), period="2y").rename(columns=assets)
+                
+                roll_corr_bond = close_data['Stocks (S&P500)'].rolling(60).corr(close_data['Bonds (20Y+)'])
+                roll_corr_usd = close_data['Stocks (S&P500)'].rolling(60).corr(close_data['US Dollar'])
+                roll_corr_gold = close_data['US Dollar'].rolling(60).corr(close_data['Gold'])
+
+                fig_roll = go.Figure()
+                fig_roll.add_trace(go.Scatter(x=roll_corr_bond.index, y=roll_corr_bond, name='Stocks vs Bonds (Risk On/Off)', line=dict(color='#58a6ff')))
+                fig_roll.add_trace(go.Scatter(x=roll_corr_usd.index, y=roll_corr_usd, name='Stocks vs USD (Liquidity)', line=dict(color='#3fb950')))
+                fig_roll.add_trace(go.Scatter(x=roll_corr_gold.index, y=roll_corr_gold, name='USD vs Gold (Real Yield)', line=dict(color='#e3b341')))
+                
+                fig_roll.add_hline(y=0, line_dash="dash", line_color="#8b949e")
+                fig_roll.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=30,b=0), hovermode="x unified")
+                st.plotly_chart(fig_roll, use_container_width=True)
+                
+                curr_sb_corr = roll_corr_bond.iloc[-1]
+                if curr_sb_corr > 0.5:
+                    st.warning("⚠️ **Regime Alert:** 株と債券が強い正の相関状態です。伝統的な分散効果が機能していません。")
+                elif curr_sb_corr < -0.5:
+                    st.success("✅ **Normal Regime:** 株と債券が逆相関です。リスクオフ時に債券がクッションとして機能します。")
+            except Exception as e: st.warning("相関データの取得をスキップしました。")
+
+        st.markdown("---")
+        st.subheader("2. Macro Fundamentals Z-Score Dashboard")
+        
+        tabs_names = [t for t in settings_df['タブ名'].unique() if "ダッシュボード" not in t]
+        if tabs_names:
+            tabs = st.tabs(tabs_names)
+            for i, t_name in enumerate(tabs_names):
+                with tabs[i]:
+                    t_df = settings_df[settings_df['タブ名'] == t_name]
+                    cols = st.columns(2)
+                    
+                    for g_idx, g_name in enumerate(t_df['グラフ名'].unique()):
+                        with cols[g_idx % 2]:
+                            g_data = t_df[t_df['グラフ名'] == g_name]
+                            fig = make_subplots(specs=[[{"secondary_y": True}]])
+                            
+                            latest_z_scores = []
+                            max_dt = None
+                            
+                            if len(g_data) == 1 and g_data.iloc[0]['ソース'] == 'CTA':
+                                pass 
+                            elif len(g_data) == 1 and g_data.iloc[0]['ソース'] == 'Options':
+                                pass 
+                            else:
+                                for _, r in g_data.iterrows():
+                                    try:
+                                        d = None
+                                        if r['ソース'] == 'FRED': d = fred.get_series(r['ティッカー']).loc['2020-01-01':]
+                                        elif r['ソース'] == 'Yahoo': d = fetch_market_data([r['ティッカー']], start='2020-01-01')[r['ティッカー']]
+                                        elif r['ソース'] == 'DBnomics': 
+                                            db_df = fetch_series(r['ティッカー'])
+                                            if not db_df.empty: d = db_df[['period', 'value']].dropna().set_index('period')['value']
+                                        
+                                        if d is not None and not d.empty:
+                                            d.index = pd.to_datetime(d.index).tz_localize(None)
+                                            if max_dt is None or d.index.max() > max_dt: max_dt = d.index.max()
+                                            
+                                            fig.add_trace(go.Scatter(x=d.index, y=d.values, name=r['データ名']), secondary_y=(r['軸']=='副軸'))
+                                            
+                                            d_3y = d.last('3Y')
+                                            if len(d_3y) > 30: 
+                                                z = (d.iloc[-1] - d_3y.mean()) / d_3y.std()
+                                                latest_z_scores.append((r['データ名'], z))
+                                    except: pass
+                                
+                                if max_dt: fig.update_xaxes(range=[max_dt - pd.DateOffset(years=2), max_dt + pd.DateOffset(days=10)])
+                                fig.update_layout(title=g_name, height=300, template="plotly_dark", hovermode="x unified", margin=dict(l=0,r=0,t=30,b=0))
+                            
+                            if fig is not None:
+                                st.plotly_chart(fig, use_container_width=True)
+                                
+                                if latest_z_scores:
+                                    z_html = "<div style='font-size:13px; text-align:right; margin-top:-15px; margin-bottom:15px;'>"
+                                    for name, z in latest_z_scores:
+                                        if z > 1.5: z_class = "zscore-hot"
+                                        elif z < -1.5: z_class = "zscore-cold"
+                                        else: z_class = "zscore-neutral"
+                                        z_html += f"<span class='{z_class}'>{name} Z: {z:+.1f}σ</span> &nbsp;&nbsp;"
+                                    z_html += "</div>"
+                                    st.markdown(z_html, unsafe_allow_html=True)
+    # ==========================================
+    # PAGE 3: Institutional Historical Analog
+    # ==========================================
+    elif page == "3. Historical Analysis (過去比較)":
+        st.title("🕰️ Historical Analog & Regime Projection")
+        st.markdown("現在の市場軌跡（T-N日）と過去の金融危機の軌跡を統計的にマッチングし、今後の「ゴーストパス（未来の軌跡）」を投影します。")
+
+        c_set1, c_set2, c_set3, c_set4 = st.columns(4)
+        target_idx = c_set1.selectbox("🎯 分析対象", ["^GSPC (S&P 500)", "^NDX (Nasdaq 100)", "^TNX (10年金利)"])
+        ticker = target_idx.split(" ")[0]
+        
+        regimes = {
+            "2022 Inflation Shock": "2022-01-03",
+            "2020 COVID Crash": "2020-02-19",
+            "2018 Volmageddon": "2018-01-26",
+            "2008 Lehman Brothers": "2008-09-15",
+            "2000 Dot-com Bubble": "2000-03-24",
+            "1987 Black Monday": "1987-10-19"
+        }
+        past_ev_name = c_set2.selectbox("📜 比較する過去のレジーム", list(regimes.keys()))
+        past_date_str = regimes[past_ev_name]
+        
+        curr_date = pd.to_datetime(c_set3.date_input("📍 現在の起点 (T=0)", pd.to_datetime("today") - pd.offsets.BDay(1))).tz_localize(None)
+        lookback = c_set4.slider("過去の照合期間 (T-日数)", 20, 120, 60)
+        lookforward = 120 
+
+        with st.spinner('Historical Analog Data processing...'):
+            try:
+                data = fetch_market_data([ticker, "^VIX"], start="1980-01-01")
+                data.index = pd.to_datetime(data.index).tz_localize(None)
+                
+                p_idx = data.index.get_indexer([pd.to_datetime(past_date_str)], method='nearest')[0]
+                c_idx = data.index.get_indexer([curr_date], method='nearest')[0]
+                
+                p_slice = data.iloc[p_idx - lookback : p_idx + lookforward + 1].copy()
+                p_slice['T'] = np.arange(-lookback, len(p_slice) - lookback)
+                
+                c_slice = data.iloc[c_idx - lookback : c_idx + 1].copy()
+                c_slice['T'] = np.arange(-lookback, 1)
+                
+                p_base_price = p_slice[ticker].loc[p_slice['T'] == 0].values[0]
+                c_base_price = c_slice[ticker].loc[c_slice['T'] == 0].values[0]
+                
+                p_slice['Price_Norm'] = (p_slice[ticker] / p_base_price) * 100
+                c_slice['Price_Norm'] = (c_slice[ticker] / c_base_price) * 100
+
+                p_compare = p_slice[p_slice['T'] <= 0]['Price_Norm'].values
+                c_compare = c_slice['Price_Norm'].values
+                min_len = min(len(p_compare), len(c_compare))
+                corr = np.corrcoef(p_compare[-min_len:], c_compare[-min_len:])[0, 1]
+                
+                st.markdown("---")
+                k1, k2, k3 = st.columns(3)
+                
+                corr_color = "#3fb950" if corr > 0.8 else "#e3b341" if corr > 0.5 else "#f85149"
+                k1.markdown(f"""<div class='metric-box'>
+                    <h4 style='color:#8b949e; margin-bottom:5px;'>Statistical Similarity (シンクロ率)</h4>
+                    <h2 style='color:{corr_color}; margin-top:0px;'>{corr*100:.1f}%</h2>
+                </div>""", unsafe_allow_html=True)
+                
+                p_drawdown = (p_slice['Price_Norm'].min() - 100)
+                k2.markdown(f"""<div class='metric-box'>
+                    <h4 style='color:#8b949e; margin-bottom:5px;'>Historical Drawdown (T+以降)</h4>
+                    <h2 style='color:#f85149; margin-top:0px;'>{p_drawdown:.1f}%</h2>
+                </div>""", unsafe_allow_html=True)
+                
+                c_ret = ((c_slice[ticker].iloc[-1] / c_slice[ticker].iloc[0]) - 1) * 100
+                k3.markdown(f"""<div class='metric-box'>
+                    <h4 style='color:#8b949e; margin-bottom:5px;'>Current Momentum</h4>
+                    <h2 style='color:{"#3fb950" if c_ret>0 else "#f85149"}; margin-top:0px;'>{c_ret:+.1f}%</h2>
+                </div>""", unsafe_allow_html=True)
+
+                fig_analog = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3], subplot_titles=("Price Analog", "Volatility Regime (VIX)"))
+                
+                p_past = p_slice[p_slice['T'] <= 0]
+                p_future = p_slice[p_slice['T'] >= 0]
+                
+                fig_analog.add_trace(go.Scatter(x=p_past['T'], y=p_past['Price_Norm'], name=f"{past_ev_name} (Up to T=0)", line=dict(color='gray', width=2)), row=1, col=1)
+                fig_analog.add_trace(go.Scatter(x=p_future['T'], y=p_future['Price_Norm'], name=f"Ghost Path (Future Projection)", line=dict(color='gray', width=2, dash='dot')), row=1, col=1)
+                fig_analog.add_trace(go.Scatter(x=c_slice['T'], y=c_slice['Price_Norm'], name="Current Market", line=dict(color='#ff4b4b', width=3)), row=1, col=1)
+
+                if "^VIX" in p_slice.columns and "^VIX" in c_slice.columns:
+                    fig_analog.add_trace(go.Scatter(x=p_slice['T'], y=p_slice['^VIX'], name=f"VIX: {past_ev_name}", line=dict(color='rgba(128,128,128,0.5)', width=1)), row=2, col=1)
+                    fig_analog.add_trace(go.Scatter(x=c_slice['T'], y=c_slice['^VIX'], name="VIX: Current", line=dict(color='#58a6ff', width=2)), row=2, col=1)
+
+                fig_analog.add_vline(x=0, line_dash="solid", line_color="#8b949e", line_width=1, row='all', col=1)
+                fig_analog.update_layout(template="plotly_dark", height=600, hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+                st.plotly_chart(fig_analog, use_container_width=True)
+
+            except Exception as e:
+                st.error(f"アナログ分析データの処理中にエラーが発生しました: {e}")
     # ==========================================
     # PAGE 4: Institutional Quant Engine (Hybrid SOTA Version)
     # ==========================================
@@ -390,10 +568,142 @@ try:
             except Exception as e: st.error(f"分析モデル・エラー: {e}")
 
     # ==========================================
-    # PAGE 5 ~ 8 (要約表示・コード省略)
+    # PAGE 5: Headline Reverse-Engineering
     # ==========================================
-    elif page in ["5. Headline Reverse-Engineering (イベント逆引き)", "6. Portfolio Optimization (アロケーション)", "7. Macro Data Explorer (マクロ生データ確認)", "8. Hybrid AI Regime Strategy (SOTAモデル)"]:
-        st.info("GitHub移行用のテンプレートコードです。これらのページのロジックも以前のコードからそのまま貼り付けてご利用いただけます。")
+    elif page == "5. Headline Reverse-Engineering (イベント逆引き)":
+        st.title("🗞️ Volatility Anomaly & Reverse-Engineering")
+        st.markdown("SPYの下落とVIXの異常な急騰（クラッシュ・シグナル）が同時に発生した「真の金融ショック日」を特定し、背景のニュースを逆引きします。")
+
+        lookback_months = st.slider("分析期間 (ヶ月)", 1, 24, 12)
+        
+        with st.spinner('市場のクラッシュ日を検出中...'):
+            try:
+                market_data = fetch_market_data(["SPY", "^VIX"], period=f"{lookback_months}mo")
+                
+                spy_data = market_data['SPY']
+                vix_data = market_data['^VIX']
+                
+                spy_ret = spy_data.pct_change().dropna() * 100
+                vix_ret = vix_data.pct_change().dropna() * 100
+                
+                vix_z = (vix_ret - vix_ret.mean()) / vix_ret.std()
+                
+                crash_days = spy_ret[(spy_ret < 0) & (vix_z > 1.5)]
+                
+                if len(crash_days) == 0:
+                    st.success("指定された期間内に、強烈なクラッシュ（異常変動）は検出されませんでした。")
+                else:
+                    top_moves = crash_days.nsmallest(min(5, len(crash_days))).index
+                    
+                    st.subheader("📊 統計的クラッシュ日の検出 (VIX Spike + SPY Drop)")
+                    fig_events = go.Figure()
+                    fig_events.add_trace(go.Scatter(x=spy_data.index, y=spy_data.values, name="SPY Price", line=dict(color='#8b949e', width=2)))
+                    
+                    for date in top_moves:
+                        ret_val = spy_ret.loc[date]
+                        vix_spike = vix_ret.loc[date]
+                        fig_events.add_trace(go.Scatter(
+                            x=[date], y=[spy_data.loc[date]], mode='markers+text',
+                            marker=dict(color='#f85149', size=14, symbol='star'),
+                            text=[f"SPY: {ret_val:.1f}%<br>VIX: +{vix_spike:.1f}%"], textposition="top center", name=f"{date.strftime('%Y-%m-%d')}"
+                        ))
+                    fig_events.update_layout(template="plotly_dark", height=400, showlegend=False)
+                    st.plotly_chart(fig_events, use_container_width=True)
+
+                    st.markdown("---")
+                    with st.expander("🤖 ニュース逆引きプロンプトの生成", expanded=True):
+                        events_text = "".join([f"- {d.strftime('%Y-%m-%d')}: SPY {spy_ret.loc[d]:+.2f}%, VIX {vix_ret.loc[d]:+.2f}%\n" for d in top_moves])
+                        llm_event_prompt = f"""あなたはマクロ経済の歴史に精通したアナリストです。
+以下の{len(top_moves)}つの日付は、S&P500が下落し、同時にVIX（恐怖指数）が統計的に異常な急騰を見せた「金融ショック日」です。
+そのトリガーとなったニュースや経済指標発表をウェブ検索等で特定し、解説してください。
+【クラッシュ発生日リスト】
+{events_text}"""
+                        st.code(llm_event_prompt, language="text")
+            except Exception as e: 
+                st.error(f"イベント特定エラー: {e}")
+    # ==========================================
+    # PAGE 7: Macro Data Explorer
+    # ==========================================
+    elif page == "7. Macro Data Explorer (マクロ生データ確認)":
+        st.title("🗄️ Macro Data Explorer")
+        st.markdown("FREDおよびYahoo FinanceからAPI経由で取得・結合したマクロ指標の生データと相関構造を確認します。")
+        
+        with st.spinner("Fetching underlying macro dataset..."):
+            try:
+                base_fred = ['ANFCI', 'T10Y3M', 'BAMLH0A0HYM2', 'WALCL', 'UMCSENT']
+                fred_data = []
+                for tic in base_fred:
+                    try: fred_data.append(fred.get_series(tic).loc["2015-01-01":].rename(tic))
+                    except: pass
+                
+                yahoo_tickers = ['SPY', '^VIX', 'HG=F', 'GC=F']
+                yahoo_data = fetch_market_data(yahoo_tickers, start="2015-01-01")
+                
+                df_fred = pd.concat(fred_data, axis=1) if fred_data else pd.DataFrame()
+                df_raw = pd.concat([yahoo_data, df_fred], axis=1).ffill().dropna()
+                
+                c1, c2 = st.columns([1, 1])
+                with c1:
+                    st.subheader("Raw Data Table (Downloadable)")
+                    st.dataframe(df_raw.sort_index(ascending=False), height=400)
+                
+                with c2:
+                    st.subheader("Cross-Indicator Correlation Matrix")
+                    corr = df_raw.corr()
+                    fig_corr = px.imshow(corr, text_auto=".2f", color_continuous_scale="RdBu_r", aspect="auto", template="plotly_dark")
+                    fig_corr.update_layout(height=400, margin=dict(l=0,r=0,t=0,b=0))
+                    st.plotly_chart(fig_corr, use_container_width=True)
+            except Exception as e:
+                st.error(f"データエクスプローラーの読み込みエラー: {e}")
+
+    # ==========================================
+    # PAGE 8: Model-First Hybrid AI (GMM Regime Mapping)
+    # ==========================================
+    elif page == "8. Hybrid AI Regime Strategy (SOTAモデル)":
+        st.title("🔬 Market Regime Map (GMM Latent States)")
+        st.markdown("S&P500の過去の軌跡に対し、GMMが事後的に割り当てた「隠れた相場状態」をマッピングします。")
+
+        with st.spinner("Training Gaussian Mixture Model for Regime Detection..."):
+            try:
+                spy = fetch_market_data(["SPY", "^VIX"], start="2010-01-01")
+                fred_series = []
+                for tic in ['T10Y3M', 'BAMLH0A0HYM2']: 
+                    try: fred_series.append(fred.get_series(tic).loc["2010-01-01":].rename(tic))
+                    except: pass
+                
+                df_hmm = pd.concat([spy, pd.concat(fred_series, axis=1)], axis=1).ffill().dropna()
+                
+                features_gmm = ['^VIX', 'T10Y3M', 'BAMLH0A0HYM2']
+                scaler_gmm = StandardScaler()
+                X_gmm = scaler_gmm.fit_transform(df_hmm[features_gmm])
+                
+                gmm = GaussianMixture(n_components=3, covariance_type='full', random_state=42)
+                df_hmm['Regime'] = gmm.fit_predict(X_gmm)
+                
+                regime_means = df_hmm.groupby('Regime')['^VIX'].mean().sort_values()
+                regime_map = {regime_means.index[0]: 'Normal (Risk-On)', 
+                              regime_means.index[1]: 'Transition (Caution)', 
+                              regime_means.index[2]: 'Crisis (Risk-Off)'}
+                df_hmm['Regime_Name'] = df_hmm['Regime'].map(regime_map)
+
+                st.subheader("Historical Regime Map (S&P 500)")
+                fig_regime = go.Figure()
+                fig_regime.add_trace(go.Scatter(x=df_hmm.index, y=df_hmm['SPY'], mode='lines', line=dict(color='#c9d1d9', width=1), name='SPY Price'))
+                
+                colors = {'Normal (Risk-On)': 'rgba(63, 185, 80, 0.5)', 'Transition (Caution)': 'rgba(227, 179, 65, 0.5)', 'Crisis (Risk-Off)': 'rgba(248, 81, 73, 0.8)'}
+                
+                df_plot = df_hmm.tail(252*5)
+                for reg in colors.keys():
+                    mask = df_plot['Regime_Name'] == reg
+                    if mask.any():
+                        fig_regime.add_trace(go.Scatter(x=df_plot.index[mask], y=df_plot['SPY'][mask], mode='markers', 
+                                                        marker=dict(color=colors[reg], size=5), name=reg))
+
+                fig_regime.update_layout(template="plotly_dark", height=500, margin=dict(l=0,r=0,t=10,b=0), hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+                st.plotly_chart(fig_regime, use_container_width=True)
+                
+            except Exception as e:
+                st.error(f"レジームマップの描画エラー: {e}")
 
 # ==========================================
 # グローバル・エラーハンドリング
