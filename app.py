@@ -173,66 +173,121 @@ try:
             fig.add_trace(go.Scatter(x=np.arange(-20, len(p_s)-20), y=p_s.values, name=past_ev, line=dict(dash='dash', color='gray')))
             fig.add_trace(go.Scatter(x=np.arange(-20, len(c_s)-20), y=c_s.values, name="Current", line=dict(width=3, color='#ff4b4b')))
             st.plotly_chart(fig.update_layout(template="plotly_dark", height=500), use_container_width=True)
-
     # ==========================================
-    # PAGE 4: Investment Strategy (AI戦略)
+    # PAGE 4: Dynamic AI Strategy (スプレッドシート連動型)
     # ==========================================
     elif page == "4. Investment Strategy (AI戦略)":
-        st.title("🧭 AI Strategy & Market Gap Analysis")
-        with st.spinner('AI学習中...'):
-            try:
-                spy = yf.Ticker("SPY").history(period="10y")['Close'].rename("SPY")
-                vix = yf.Ticker("^VIX").history(period="10y")['Close'].rename("VIX")
-                dxy = yf.Ticker("DX-Y.NYB").history(period="10y")['Close'].rename("USD")
-                t10y2y = fred.get_series("T10Y2Y").rename("Yield_Curve")
-                hy = fred.get_series("BAMLH0A0HYM2").rename("HY_Spread")
-                
-                series = normalize_data([spy, vix, dxy, t10y2y, hy])
-                df_ml = pd.concat(series, axis=1).ffill().dropna()
-                df_ml['Mom'], df_ml['RSI'] = df_ml['SPY'].pct_change(21), (df_ml['SPY'].diff().apply(lambda x: x if x > 0 else 0).rolling(14).mean() / df_ml['SPY'].diff().abs().rolling(14).mean()) * 100
-                df_ml['Vol'] = df_ml['SPY'].pct_change().rolling(21).std() * np.sqrt(252)
-                df_ml['Target'] = df_ml['SPY'].pct_change(21).shift(-21)
-                
-                features = ['VIX', 'USD', 'Yield_Curve', 'HY_Spread', 'Mom', 'RSI', 'Vol']
-                df_train = df_ml.dropna()
-                X, y = df_train[features], df_train['Target']
-                weights = np.exp(np.linspace(-1, 0, len(X)))
-                model = RandomForestRegressor(n_estimators=100, random_state=42).fit(X, y, sample_weight=weights)
-                
-                pred_ret = model.predict(df_ml[features].iloc[-1:])[0] * 100
+        st.title("🧠 Dynamic AI Strategy & Gap Analysis")
+        st.markdown("Page 1 & 2で定義されたすべてのマクロ指標を統合し、AIが最適な予測モデルを自動構築します。")
 
-                # --- 1. Gap Analysis ---
+        with st.spinner('スプレッドシートから全指標を抽出し、AIを学習中... (約10〜20秒)'):
+            try:
+                # --- 1. スプレッドシートから動的にティッカーを抽出 ---
+                target_ticker = "SPY" # 予測の目的変数
+                
+                # Yahoo系のティッカー抽出
+                yahoo_tickers = settings_df[settings_df['ソース'] == 'Yahoo']['ティッカー'].unique().tolist()
+                if target_ticker not in yahoo_tickers: yahoo_tickers.append(target_ticker)
+                
+                # FRED系のティッカー抽出
+                fred_tickers = settings_df[settings_df['ソース'] == 'FRED']['ティッカー'].unique().tolist()
+
+                # --- 2. データのバルク取得 ---
+                series_list = []
+                
+                # Yahooデータの一括取得
+                if yahoo_tickers:
+                    y_data = yf.download(yahoo_tickers, period="5y", progress=False)['Close']
+                    if len(yahoo_tickers) == 1: y_data = pd.DataFrame(y_data, columns=yahoo_tickers)
+                    for col in y_data.columns:
+                        s = y_data[col].dropna().rename(col)
+                        series_list.append(s)
+                
+                # FREDデータの個別取得
+                for tic in fred_tickers:
+                    try:
+                        s = fred.get_series(tic).loc['2019-01-01':].dropna().rename(tic)
+                        series_list.append(s)
+                    except: pass
+
+                # --- 3. タイムゾーン正規化とデータの結合 ---
+                for i in range(len(series_list)):
+                    series_list[i].index = pd.to_datetime(series_list[i].index).tz_localize(None).normalize()
+                
+                # 月次データ等で生じるNaNを前方の値で埋める(ffill)
+                df_ml = pd.concat(series_list, axis=1).ffill()
+                
+                # 特徴量エンジニアリング (目的変数 SPY のモメンタムとボラティリティを追加)
+                df_ml['SPY_Mom_1M'] = df_ml[target_ticker].pct_change(21)
+                df_ml['SPY_Vol_1M'] = df_ml[target_ticker].pct_change().rolling(21).std() * np.sqrt(252)
+                
+                # AIが予測するターゲット (21営業日後のSPYリターン)
+                df_ml['Target'] = df_ml[target_ticker].pct_change(21).shift(-21)
+                
+                # 欠損値を含む行を削除し、学習可能な完全データセットを作成
+                df_train = df_ml.dropna()
+                
+                # ターゲット変数以外のすべてを特徴量(X)とする
+                features = [col for col in df_train.columns if col != 'Target']
+                X, y = df_train[features], df_train['Target']
+                
+                # --- 4. 機械学習モデルの構築 ---
+                # 直近のデータほど重みを大きくする
+                weights = np.exp(np.linspace(-1, 0, len(X)))
+                model = RandomForestRegressor(n_estimators=100, random_state=42, max_depth=10).fit(X, y, sample_weight=weights)
+                
+                # 最新データで予測
+                latest_x = df_ml[features].iloc[-1:]
+                pred_ret = model.predict(latest_x)[0] * 100
+
+                # --- 5. ダッシュボード表示: 乖離分析 ---
                 st.subheader("1. Market vs AI Gap Analysis")
                 c_g1, c_g2 = st.columns([2, 1])
                 with c_g1:
                     td = df_ml.tail(60).copy()
-                    td['AI_Fair'] = (model.predict(td[features]) + 1) * td['SPY']
+                    td['AI_Fair'] = (model.predict(td[features]) + 1) * td[target_ticker]
                     fg = go.Figure()
-                    fg.add_trace(go.Scatter(x=td.index, y=td['SPY'], name="Market", line=dict(color='#ff4b4b', width=2)))
-                    fg.add_trace(go.Scatter(x=td.index, y=td['AI_Fair'], name="AI Theoretical", line=dict(dash='dot', color='#58a6ff')))
-                    st.plotly_chart(fg.update_layout(template="plotly_dark", height=300), use_container_width=True)
+                    fg.add_trace(go.Scatter(x=td.index, y=td[target_ticker], name="Market Price (SPY)", line=dict(color='#ff4b4b', width=2)))
+                    fg.add_trace(go.Scatter(x=td.index, y=td['AI_Fair'], name="AI Theoretical Value", line=dict(dash='dot', color='#58a6ff')))
+                    st.plotly_chart(fg.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=20,b=0)), use_container_width=True)
                 with c_g2:
-                    gap = ((df_ml['SPY'].iloc[-1] - td['AI_Fair'].iloc[-1]) / td['AI_Fair'].iloc[-1]) * 100
-                    st.metric("AI理論値との乖離率", f"{gap:+.2f}%")
-                    if gap > 2: st.warning("過熱気味")
-                    elif gap < -2: st.success("割安圏")
+                    gap = ((df_ml[target_ticker].iloc[-1] - td['AI_Fair'].iloc[-1]) / td['AI_Fair'].iloc[-1]) * 100
+                    st.metric("AI理論値との乖離率 (Spread)", f"{gap:+.2f}%")
+                    if gap > 2: st.warning("⚠️ 理論値を上回る過熱状態")
+                    elif gap < -2: st.success("✅ マクロ的に割安水準")
+                    else: st.info("⚖️ 適正水準")
 
-                # --- 2. Strategy ---
+                # --- 6. ダッシュボード表示: 特徴量重要度 ---
                 st.markdown("---")
-                st.subheader("2. Investment Strategy Decision")
+                st.subheader("2. Model Insights: AIは何を見て判断したか？")
+                st.markdown("あなたが設定したマクロ指標群の中で、**現在S&P500の予測に最も貢献している指標トップ10**です。")
+                
+                imp_df = pd.DataFrame({'Feature': features, 'Importance': model.feature_importances_}).sort_values('Importance', ascending=False).head(10)
+                fig_imp = px.bar(imp_df.sort_values('Importance', ascending=True), x='Importance', y='Feature', orientation='h', template="plotly_dark", color='Importance', color_continuous_scale='Blues')
+                st.plotly_chart(fig_imp.update_layout(height=300, margin=dict(l=0,r=0,t=0,b=0)), use_container_width=True)
+
+                # --- 7. 統合戦略判断 ---
+                st.markdown("---")
+                st.subheader("3. Executive Strategy Decision")
                 cl1, cl2 = st.columns([2, 1])
                 with cl1:
-                    score = np.clip(pred_ret * 2, -5, 5) + (1 if hy.iloc[-1] < 4 else -1)
-                    st.markdown(f"<div class='insight-box'><h3>AI判定: {'積極投資' if score > 2 else '慎重ホールド' if score > -1 else '防御待機'}</h3><p>AI予測リターン: {pred_ret:+.2f}%</p></div>", unsafe_allow_html=True)
+                    # 簡易的なボラティリティ(VIX)を安全弁としてスコア化
+                    vix_val = df_ml['^VIX'].iloc[-1] if '^VIX' in df_ml.columns else 20
+                    score = np.clip(pred_ret * 2, -5, 5) + (1 if vix_val < 20 else -1)
+                    
+                    if score > 2: status, color, icon = "積極的投資", "#00ff00", "🚀"
+                    elif score > -1: status, color, icon = "部分的投資", "#58a6ff", "⚖️"
+                    else: status, color, icon = "防御的待機", "#f85149", "🛡️"
+                    
+                    st.markdown(f"<div class='insight-box' style='border-left: 5px solid {color};'><h3>AI判定: {icon} {status}</h3><p style='font-size:18px;'>AI予測 1ヶ月リターン: <b>{pred_ret:+.2f}%</b></p></div>", unsafe_allow_html=True)
                 with cl2:
-                    risk = max(0, min(100, (1/vix.iloc[-1])*1500))
-                    st.plotly_chart(go.Figure(go.Indicator(mode="gauge+number", value=risk, title={'text':"リスク露出度"}, gauge={'axis':{'range':[0,100]},'bar':{'color':'#58a6ff'}})).update_layout(template="plotly_dark", height=250), use_container_width=True)
-                
-                st.markdown("#### 📝 アクションプラン")
-                if score > 2: st.write("・SPYロング継続。\n・押し目買い戦略。")
-                elif score > -1: st.write("・ポジションを縮小。\n・ヘッジを検討。")
-                else: st.write("・キャッシュ化。\n・嵐が過ぎるのを待つ。")
-            except Exception as e: st.error(f"AIエラー: {e}")
+                    risk = max(0, min(100, (1/vix_val)*1500))
+                    st.plotly_chart(go.Figure(go.Indicator(mode="gauge+number", value=risk, title={'text':"推奨リスク露出度"}, gauge={'axis':{'range':[0,100]},'bar':{'color':color}})).update_layout(template="plotly_dark", height=200, margin=dict(t=30,b=0)), use_container_width=True)
 
+            except Exception as e: st.error(f"AI学習エラー: {e}\n(※データが不足しているティッカーがスプレッドシートにある可能性があります)")
+
+    except Exception as e:
+        st.error(f"System Critical Error: {e}")
+   
 except Exception as e:
     st.error(f"システムクリティカルエラー: {e}")
