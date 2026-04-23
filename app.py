@@ -337,10 +337,9 @@ try:
                 st.subheader("🤖 LLM Analysis Prompt (言語化用プロンプト)")
                 st.markdown("以下のテキストをコピーして、GeminiやChatGPTに貼り付けてください。現在のデータを元に、プロのクオンツ目線で相場環境を解説してくれます。")
 
-                # 特徴量上位5つのテキスト化
                 top_features_text = ""
                 for _, row in imp_df.head(6).iterrows():
-                    top_features_text += f"- {row['Feature']}: 重要度 {row['Importance']:.4f}, 現在のZ-Score {row['Z_Score']:+.2f}\n"
+                    top_features_text += f"- {row['Feature']}: 重要度 {row['Importance']:.4f}, 現在のZ-Score {row['Z_Score']:+.2f}\\n"
 
                 anfci_val = df_ml['ANFCI'].iloc[-1] if 'ANFCI' in df_ml.columns else "データなし"
                 cycle_val = df_ml['Presidential_Cycle'].iloc[-1]
@@ -353,7 +352,7 @@ try:
 ・AI予測 1ヶ月リターン: {pred_ret:+.2f}%
 ・現在価格とAI適正価格の乖離率: {gap:+.2f}% (プラスなら相場が割高・過熱、マイナスなら割安)
 ・現在のVIX (恐怖指数): {vix_val:.2f}
-・現在のANFCI (シカゴ連銀 金融環境指数): {anfci_val} (プラスなら引き締め的、マイナスなら緩和的)
+・現在のANFCI (シカゴ連銀 金融環境指数): {anfci_val}
 ・現在の大統領選サイクル: {cycle_dict.get(cycle_val, "不明")}
 
 【AIが重視している特徴量上位と、現在値のZ-Score (直近3年比の異常度)】
@@ -361,11 +360,16 @@ try:
 ※Z-Scoreが+2以上、または-2以下のものは、過去3年平均から大きく逸脱した「異常値」として相場を強く牽引・圧迫しています。
 
 【出力要件】
-1. 現在の市場を牽引（または圧迫）している主要なマクロ要因は何か？（特徴量のZ-Scoreの異常値を元に、なぜそれが効いているのか因果関係を考察してください）
-2. AIの適正価格との乖離(Spread)や、金融ストレス(ANFCI)を考慮した、現在の市場の「歪み」や「死角となるリスク」。
+1. 現在の市場を牽引（または圧迫）している主要なマクロ要因は何か？（特徴量のZ-Scoreの異常値を元に因果関係を考察してください）
+2. AIの適正価格との乖離(Spread)や、金融ストレス(ANFCI)を考慮した、現在の市場の「歪み」やリスク。
 3. クオンツ目線での、今後1ヶ月の具体的な投資スタンス（強気/弱気/中立）とアクションプラン。
 出力は、機関投資家のポートフォリオ・マネージャー宛てのレポートのような、論理的で洗練されたトーンにしてください。
 """
                 st.code(llm_prompt, language="text")
 
-            except Exception as e: st.error(f"分析エラー: {e}")
+            except Exception as e: 
+                st.error(f"分析エラー: {e}")
+
+# ===== ココが重要！システム全体を囲む try の except =====
+except Exception as e:
+    st.error(f"System Critical Error: {e}")
