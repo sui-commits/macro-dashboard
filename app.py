@@ -286,8 +286,5 @@ try:
 
             except Exception as e: st.error(f"AI学習エラー: {e}\n(※データが不足しているティッカーがスプレッドシートにある可能性があります)")
 
-    except Exception as e:
-        st.error(f"System Critical Error: {e}")
-   
 except Exception as e:
-    st.error(f"システムクリティカルエラー: {e}")
+    st.error(f"System Critical Error: {e}")
