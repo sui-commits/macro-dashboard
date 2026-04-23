@@ -43,10 +43,16 @@ try:
                     fig = go.Figure()
                     fig.add_trace(go.Scatter(x=data.index, y=data.values, name=name, mode='lines', line=dict(width=2)))
                     
-                    # グラフのレイアウト設定
-                    fig.update_layout(title=name, hovermode="x unified", height=350, margin=dict(l=0, r=0, t=40, b=0))
+                    # ▼ 修正ポイント: dragmode='pan' を追加して「左クリックで掴んで動かす」を初期設定に
+                    fig.update_layout(
+                        title=name, 
+                        hovermode="x unified", 
+                        height=350, 
+                        margin=dict(l=0, r=0, t=40, b=0),
+                        dragmode='pan' 
+                    )
                     
-                    # ▼ 修正ポイント: config={'scrollZoom': True} を追加してマウススクロールでのズームを有効化
+                    # マウススクロールでのズームを有効化
                     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
                     
                 except Exception as e:
