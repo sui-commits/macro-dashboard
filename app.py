@@ -177,7 +177,7 @@ try:
     # ==========================================
     # PAGE 4: Investment Strategy (AI戦略)
     # ==========================================
-    elif page == "4. Investment Strategy (AI分析)":
+    elif page == "4. Investment Strategy (AI戦略)":
         st.title("🧭 AI Strategy & Market Gap Analysis")
         with st.spinner('AI学習中...'):
             try:
