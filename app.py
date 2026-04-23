@@ -21,8 +21,8 @@ def load_settings():
 try:
     settings_df = load_settings()
     
-    # スプレッドシートの「グループ」ごとにタブを自動生成
-    groups = settings_df['グループ'].unique()
+    # ▼ 修正ポイント: タブを作る際、Arrow形式のデータを通常のリストに変換（.tolist()を追加）
+    groups = settings_df['グループ'].unique().tolist()
     tabs = st.tabs(groups)
 
     # 各タブの中にグラフを描画
@@ -32,8 +32,8 @@ try:
             group_df = settings_df[settings_df['グループ'] == group]
             
             for index, row in group_df.iterrows():
-                name = row['指標名']
-                ticker = row['ティッカー']
+                name = str(row['指標名'])
+                ticker = str(row['ティッカー'])
                 
                 try:
                     # データの取得とグラフ化
@@ -45,7 +45,7 @@ try:
                     fig.update_layout(title=name, hovermode="x unified", height=350, margin=dict(l=0, r=0, t=40, b=0))
                     st.plotly_chart(fig, use_container_width=True)
                 except Exception as e:
-                    st.error(f"{name} のデータが取得できませんでした。")
+                    st.error(f"{name} のデータが取得できませんでした。エラー: {e}")
                     
 except Exception as e:
     st.error(f"エラーの詳細: {e}")
