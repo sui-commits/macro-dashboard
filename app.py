@@ -14,6 +14,36 @@ from sklearn.preprocessing import StandardScaler
 import warnings
 import scipy.optimize as sco
 import numpy.linalg as la
+# --- 最上部付近（共通データ処理関数）に追加 ---
+import time
+
+@st.cache_data(ttl=3600) # 1時間キャッシュ
+def fetch_market_data(tickers, period="5y"):
+    """Yahoo Financeから株価データをバルク取得してキャッシュする"""
+    try:
+        data = yf.download(tickers, period=period, progress=False)['Close']
+        if isinstance(data, pd.Series):
+            data = data.to_frame(tickers[0])
+        return data
+    except Exception as e:
+        st.toast(f"⚠️ Yahoo Financeからのデータ取得エラー: {e}")
+        return pd.DataFrame()
+
+@st.cache_data(ttl=86400) # FREDデータは更新頻度が低いので24時間キャッシュ
+def fetch_fred_data(tickers, start_date):
+    """FREDからマクロ指標をバルク取得してキャッシュする"""
+    df_list = []
+    for tic in tickers:
+        try:
+            s = fred.get_series(tic).loc[start_date:].rename(tic)
+            df_list.append(s)
+            time.sleep(0.1) # レートリミット回避
+        except Exception as e:
+            st.toast(f"⚠️ FRED指標({tic})の取得エラー")
+    
+    if df_list:
+        return pd.concat(df_list, axis=1).ffill()
+    return pd.DataFrame()
 
 # エラー抑制
 warnings.filterwarnings('ignore')
@@ -184,38 +214,43 @@ try:
                 st.plotly_chart(fig_cta, use_container_width=True)
                 st.info(f"**CTA Bias:** 価格は200日線から `{dist_200:+.1f}%` 乖離。トレンドフォロワーは現在 **{'強気 (Long)' if dist_200 > 0 else '弱気 (Short)'}** ポジションに偏っています。")
             except: pass
-
-        with c_opt:
-            st.markdown("#### 🎯 SPY Options Max Pain Magnet")
-            try:
-                spy_opt = yf.Ticker("SPY")
-                exp = spy_opt.options[0] # 直近の満期日
-                c, p = spy_opt.option_chain(exp).calls, spy_opt.option_chain(exp).puts
-                
-                strikes = sorted(list(set(c['strike']).union(set(p['strike']))))
-                mp, min_l = 0, float('inf')
-                for s in strikes:
-                    l = c[c['strike']<s].apply(lambda x:(s-x['strike'])*x['openInterest'], axis=1).sum() + p[p['strike']>s].apply(lambda x:(x['strike']-s)*x['openInterest'], axis=1).sum()
-                    if l < min_l: min_l, mp = l, s
-                    
-                curr_price = spy['Close'].iloc[-1]
-                diff_mp = ((curr_price - mp) / mp) * 100
-                
-                fig_gauge = go.Figure(go.Indicator(
-                    mode = "gauge+number+delta",
-                    value = curr_price,
-                    delta = {'reference': mp, 'position': "top", 'formatter': "{+g} points to Wall"},
-                    title = {'text': f"Target: ${mp:.0f} (Exp: {exp})"},
-                    gauge = {
-                        'axis': {'range': [mp * 0.9, mp * 1.1]},
-                        'bar': {'color': "#58a6ff"},
-                        'threshold': {'line': {'color': "yellow", 'width': 4}, 'thickness': 0.75, 'value': mp}
-                    }
-                ))
-                fig_gauge.update_layout(template="plotly_dark", height=250, margin=dict(t=40, b=0, l=20, r=20))
-                st.plotly_chart(fig_gauge, use_container_width=True)
-                st.write(f"市場のディーラーが最も利益を得る（＝オプションの買い手が最も損をする）価格帯（黄色い線）です。満期に向けてこの価格に引き寄せられるマグネット効果に注意してください。")
-            except Exception as e: st.write("Options data unavailable")
+with c_opt:
+    st.markdown("#### 🎯 SPY Options Wall & Net Gamma Proxy")
+    try:
+        spy_opt = yf.Ticker("SPY")
+        exp = spy_opt.options[0] # 直近の満期日
+        c, p = spy_opt.option_chain(exp).calls, spy_opt.option_chain(exp).puts
+        curr_price = spy['Close'].iloc[-1]
+        
+        # 簡易Net Gamma Proxy (Call OI - Put OI) をストライクごとに計算
+        # ※本来はグリークス(Gamma)が必要ですが、建玉の偏りで代用
+        df_c = c[['strike', 'openInterest']].rename(columns={'openInterest': 'Call_OI'})
+        df_p = p[['strike', 'openInterest']].rename(columns={'openInterest': 'Put_OI'})
+        df_oi = pd.merge(df_c, df_p, on='strike', how='outer').fillna(0)
+        df_oi['Net_OI'] = df_oi['Call_OI'] - df_oi['Put_OI']
+        
+        # 現在価格の上下10%のストライクに絞る
+        df_oi = df_oi[(df_oi['strike'] > curr_price * 0.9) & (df_oi['strike'] < curr_price * 1.1)]
+        
+        fig_gex = go.Figure()
+        fig_gex.add_trace(go.Bar(x=df_oi['strike'], y=df_oi['Net_OI'], 
+                                 marker_color=np.where(df_oi['Net_OI'] > 0, '#58a6ff', '#f85149'),
+                                 name='Net Exposure'))
+        fig_gex.add_vline(x=curr_price, line_dash="solid", line_color="yellow", annotation_text="Current Price")
+        
+        fig_gex.update_layout(template="plotly_dark", height=250, margin=dict(t=30, b=0, l=0, r=0),
+                              title=f"Dealer Exposure Proxy (Exp: {exp})", barmode='relative')
+        st.plotly_chart(fig_gex, use_container_width=True)
+        
+        # 解釈の表示
+        net_total = df_oi['Net_OI'].sum()
+        if net_total > 0:
+            st.info("✅ **Long Gamma Regime:** コール建玉が優勢。ディーラーの逆張りヘッジにより、相場の変動率（ボラティリティ）は抑えられやすい環境です。")
+        else:
+            st.error("⚠️ **Short Gamma Regime:** プット建玉が優勢。ディーラーの順張りヘッジ（売られたら売る）により、暴落が加速しやすい危険な環境です。")
+            
+    except Exception as e: 
+        st.toast(f"オプションデータの処理に失敗: {e}")
 
     # ==========================================
     # PAGE 2: Institutional Asset Class Macro
@@ -566,16 +601,23 @@ try:
                 # --- 2. 特徴量エンジニアリング ---
                 df_ml['CTA_200D_Bias'] = df_ml[target_ticker] / df_ml[target_ticker].rolling(200).mean() - 1
                 df_ml['Vol_Term_Spread'] = df_ml['^VIX'] / df_ml['^VIX3M']
+# ... (他の特徴量) ...
                 df_ml['Copper_Gold_Ratio'] = df_ml['HG=F'] / df_ml['GC=F']
                 df_ml['Presidential_Cycle'] = df_ml.index.year % 4
+                # ターゲット変数の作成（21日後のリターン）
                 df_ml['Target'] = df_ml[target_ticker].pct_change(21).shift(-21)
-                df_train = df_ml.dropna()
 
                 drop_cols = ['Target', 'HG=F', 'GC=F', 'XLY', 'XLP', '^VIX', '^VIX3M']
                 if exclude_other_stocks: drop_cols.extend([t for t in yahoo_tickers if t != target_ticker])
                 if not include_anomaly: drop_cols.append('Presidential_Cycle')
+                
+                features = [col for col in df_ml.columns if col not in drop_cols]
 
-                features = [col for col in df_train.columns if col not in drop_cols]
+                # 【修正ポイント】推論用の「最新データ（今日）」を、dropnaする「前」に確保する
+                latest_x = df_ml[features].iloc[-1:] 
+
+                # 学習用データは、未来の結果(Target)がまだ確定していない直近21日間を除外する
+                df_train = df_ml.dropna(subset=['Target'] + features)
                 X, y = df_train[features], df_train['Target']
                 
                 # --- 3. アンサンブル学習 (Tri-Model Integration) ---
