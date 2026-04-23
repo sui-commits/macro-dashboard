@@ -60,12 +60,15 @@ def normalize_data(series_list):
 # ==========================================
 try:
     settings_df = load_settings()
+# サイドバーのメニュー項目を全ページ分に拡張します
     st.sidebar.title("💎 Macro Navigation")
     page = st.sidebar.radio("機能を選択", [
         "1. Market Dynamics (現在)", 
         "2. Asset Class Macro (アセット別分析)", 
         "3. Historical Analysis (過去比較)",
-        "4. Investment Strategy (AI戦略)"
+        "4. Investment Strategy (AI戦略)",
+        "5. Headline Reverse-Engineering (イベント逆引き)", # これを追加
+        "6. Portfolio Optimization (アロケーション)"     # これを追加
     ])
 
     # ==========================================
