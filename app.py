@@ -210,6 +210,7 @@ try:
         st.markdown("### 1. Random Forest Forward Prediction")
         with st.spinner('特徴量生成とAIの学習・バックテストを実行中...'):
             try:
+               # 生データの取得
                 spy = yf.Ticker("SPY").history(period="10y")['Close'].rename("SPY")
                 vix = yf.Ticker("^VIX").history(period="10y")['Close'].rename("VIX")
                 dxy = yf.Ticker("DX-Y.NYB").history(period="10y")['Close'].rename("Dollar_Index")
@@ -217,8 +218,13 @@ try:
                 hy = fred.get_series("BAMLH0A0HYM2").rename("HY_Spread")
                 breakeven = fred.get_series("T10YIE").rename("Inflation_Expectation")
 
-                df_ml = pd.concat([spy, vix, dxy, t10y2y, hy, breakeven], axis=1).fillna(method='ffill')
-                
+                # ▼ 修正ポイント: 全ての日付データからタイムゾーン(tz)を削除し、時刻を00:00に統一(normalize)する
+                series_list = [spy, vix, dxy, t10y2y, hy, breakeven]
+                for s in series_list:
+                    s.index = pd.to_datetime(s.index).tz_localize(None).normalize()
+
+                # タイムゾーンを消したクリーンな状態で結合
+                df_ml = pd.concat(series_list, axis=1).fillna(method='ffill')
                 # 特徴量エンジニアリング
                 df_ml['SPY_Ret_1m'] = df_ml['SPY'].pct_change(21) * 100
                 df_ml['VIX_SMA20'] = df_ml['VIX'].rolling(20).mean()
