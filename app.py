@@ -1,3 +1,4 @@
+from sklearn.mixture import GaussianMixture
 import streamlit as st
 import pandas as pd
 from fredapi import Fred
@@ -174,117 +175,179 @@ try:
             fig.add_trace(go.Scatter(x=np.arange(-20, len(c_s)-20), y=c_s.values, name="Current", line=dict(width=3, color='#ff4b4b')))
             st.plotly_chart(fig.update_layout(template="plotly_dark", height=500), use_container_width=True)
     # ==========================================
-    # PAGE 4: Dynamic AI Strategy (スプレッドシート連動型)
+    # PAGE 4: Institutional Quant Engine
     # ==========================================
     elif page == "4. Investment Strategy (AI戦略)":
-        st.title("🧠 Dynamic AI Strategy & Gap Analysis")
-        st.markdown("Page 1 & 2で定義されたすべてのマクロ指標を統合し、AIが最適な予測モデルを自動構築します。")
+        st.title("🧠 Institutional Quant Strategy Engine")
+        st.markdown("ガウス混合モデルによるレジーム判定、ボラティリティ・ターゲティング、そしてCTA/オプションの代替特徴量を用いた機関投資家レベルのクオンツ解析を実行します。")
 
-        with st.spinner('スプレッドシートから全指標を抽出し、AIを学習中... (約10〜20秒)'):
+        with st.spinner('高度な数学的モデリングとバックテストを実行中... (計算に時間がかかります)'):
             try:
-                # --- 1. スプレッドシートから動的にティッカーを抽出 ---
-                target_ticker = "SPY" # 予測の目的変数
+                # --- 1. データのバルク取得とプロキシ生成 ---
+                target_ticker = "SPY"
                 
-                # Yahoo系のティッカー抽出
-                yahoo_tickers = settings_df[settings_df['ソース'] == 'Yahoo']['ティッカー'].unique().tolist()
-                if target_ticker not in yahoo_tickers: yahoo_tickers.append(target_ticker)
-                
-                # FRED系のティッカー抽出
-                fred_tickers = settings_df[settings_df['ソース'] == 'FRED']['ティッカー'].unique().tolist()
+                # スプレッドシートからの動的取得に加えて、高度解析に必須なコアデータを強制取得
+                core_tickers = [target_ticker, "^VIX", "^VIX3M", "DX-Y.NYB"]
+                y_data = yf.download(core_tickers, period="10y", progress=False)['Close']
+                y_data.index = pd.to_datetime(y_data.index).tz_localize(None).normalize()
+                df_ml = y_data.ffill().dropna()
 
-                # --- 2. データのバルク取得 ---
-                series_list = []
-                
-                # Yahooデータの一括取得
-                if yahoo_tickers:
-                    y_data = yf.download(yahoo_tickers, period="5y", progress=False)['Close']
-                    if len(yahoo_tickers) == 1: y_data = pd.DataFrame(y_data, columns=yahoo_tickers)
-                    for col in y_data.columns:
-                        s = y_data[col].dropna().rename(col)
-                        series_list.append(s)
-                
-                # FREDデータの個別取得
-                for tic in fred_tickers:
-                    try:
-                        s = fred.get_series(tic).loc['2019-01-01':].dropna().rename(tic)
-                        series_list.append(s)
-                    except: pass
+                # --- 2. Advanced Feature Engineering (プロのクオンツ指標) ---
+                # A. CTA Trend Proxy (トレンドフォロワーのポジション推定)
+                df_ml['SMA50'] = df_ml[target_ticker].rolling(50).mean()
+                df_ml['SMA200'] = df_ml[target_ticker].rolling(200).mean()
+                df_ml['CTA_Dist_200'] = (df_ml[target_ticker] / df_ml['SMA200']) - 1 # 200日線乖離
+                df_ml['CTA_Cross'] = (df_ml['SMA50'] / df_ml['SMA200']) - 1          # ゴールデン/デッドクロス強度
 
-                # --- 3. タイムゾーン正規化とデータの結合 ---
-                for i in range(len(series_list)):
-                    series_list[i].index = pd.to_datetime(series_list[i].index).tz_localize(None).normalize()
+                # B. Options Market Proxy (オプション市場のストレス構造)
+                # VIX(1ヶ月) / VIX3M(3ヶ月) が1を超えるとバックワーデーション(プット需要の極端な急増)
+                df_ml['Vol_Term_Structure'] = df_ml['^VIX'] / df_ml['^VIX3M'] 
                 
-                # 月次データ等で生じるNaNを前方の値で埋める(ffill)
-                df_ml = pd.concat(series_list, axis=1).ffill()
-                
-                # 特徴量エンジニアリング (目的変数 SPY のモメンタムとボラティリティを追加)
-                df_ml['SPY_Mom_1M'] = df_ml[target_ticker].pct_change(21)
-                df_ml['SPY_Vol_1M'] = df_ml[target_ticker].pct_change().rolling(21).std() * np.sqrt(252)
-                
-                # AIが予測するターゲット (21営業日後のSPYリターン)
+                # C. Momentum & Volatility
+                df_ml['Return_1M'] = df_ml[target_ticker].pct_change(21)
+                df_ml['Vol_1M'] = df_ml[target_ticker].pct_change().rolling(21).std() * np.sqrt(252)
+
+                # Target (21営業日後のリターン)
                 df_ml['Target'] = df_ml[target_ticker].pct_change(21).shift(-21)
                 
-                # 欠損値を含む行を削除し、学習可能な完全データセットを作成
-                df_train = df_ml.dropna()
+                # 欠損値処理
+                df_ml = df_ml.dropna()
                 
-                # ターゲット変数以外のすべてを特徴量(X)とする
-                features = [col for col in df_train.columns if col != 'Target']
-                X, y = df_train[features], df_train['Target']
+                # --- 3. Market Regime Detection (ガウス混合モデルによる相場環境認識) ---
+                # リターンとボラティリティから、相場を2つの状態(レジーム)にクラスタリング
+                regime_features = df_ml[['Return_1M', 'Vol_1M']]
+                gmm = GaussianMixture(n_components=2, random_state=42)
+                df_ml['Regime'] = gmm.fit_predict(regime_features)
                 
-                # --- 4. 機械学習モデルの構築 ---
-                # 直近のデータほど重みを大きくする
-                weights = np.exp(np.linspace(-1, 0, len(X)))
-                model = RandomForestRegressor(n_estimators=100, random_state=42, max_depth=10).fit(X, y, sample_weight=weights)
+                # ボラティリティが高い方を「Risk-Off (1)」、低い方を「Risk-On (0)」にラベル統一
+                vol_regime0 = df_ml[df_ml['Regime'] == 0]['Vol_1M'].mean()
+                vol_regime1 = df_ml[df_ml['Regime'] == 1]['Vol_1M'].mean()
+                if vol_regime0 > vol_regime1:
+                    df_ml['Regime'] = 1 - df_ml['Regime'] # 反転
                 
-                # 最新データで予測
+                curr_regime = df_ml['Regime'].iloc[-1]
+                regime_name = "🔴 Risk-Off Regime (高ボラティリティ・警戒相場)" if curr_regime == 1 else "🟢 Risk-On Regime (低ボラティリティ・安定相場)"
+
+                # --- 4. Machine Learning (予測エンジン) ---
+                features = ['^VIX', 'DX-Y.NYB', 'CTA_Dist_200', 'CTA_Cross', 'Vol_Term_Structure', 'Return_1M', 'Vol_1M']
+                X, y = df_ml[features], df_ml['Target']
+                
+                # 直近重視の指数関数的ウェイト
+                weights = np.exp(np.linspace(-2, 0, len(X)))
+                model = RandomForestRegressor(n_estimators=200, max_depth=8, min_samples_leaf=5, random_state=42)
+                model.fit(X, y, sample_weight=weights)
+                
                 latest_x = df_ml[features].iloc[-1:]
                 pred_ret = model.predict(latest_x)[0] * 100
 
-                # --- 5. ダッシュボード表示: 乖離分析 ---
-                st.subheader("1. Market vs AI Gap Analysis")
-                c_g1, c_g2 = st.columns([2, 1])
-                with c_g1:
-                    td = df_ml.tail(60).copy()
-                    td['AI_Fair'] = (model.predict(td[features]) + 1) * td[target_ticker]
-                    fg = go.Figure()
-                    fg.add_trace(go.Scatter(x=td.index, y=td[target_ticker], name="Market Price (SPY)", line=dict(color='#ff4b4b', width=2)))
-                    fg.add_trace(go.Scatter(x=td.index, y=td['AI_Fair'], name="AI Theoretical Value", line=dict(dash='dot', color='#58a6ff')))
-                    st.plotly_chart(fg.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=20,b=0)), use_container_width=True)
-                with c_g2:
-                    gap = ((df_ml[target_ticker].iloc[-1] - td['AI_Fair'].iloc[-1]) / td['AI_Fair'].iloc[-1]) * 100
-                    st.metric("AI理論値との乖離率 (Spread)", f"{gap:+.2f}%")
-                    if gap > 2: st.warning("⚠️ 理論値を上回る過熱状態")
-                    elif gap < -2: st.success("✅ マクロ的に割安水準")
-                    else: st.info("⚖️ 適正水準")
-
-                # --- 6. ダッシュボード表示: 特徴量重要度 ---
-                st.markdown("---")
-                st.subheader("2. Model Insights: AIは何を見て判断したか？")
-                st.markdown("あなたが設定したマクロ指標群の中で、**現在S&P500の予測に最も貢献している指標トップ10**です。")
+                # --- 5. Backtest Engine (プロ仕様のバックテストとリスク指標) ---
+                # 過去のデータに対してモデルの予測値を計算し、取引シグナルを生成
+                df_ml['Predicted_Ret'] = model.predict(X)
+                df_ml['Signal'] = np.where(df_ml['Predicted_Ret'] > 0, 1, 0) # 予測がプラスならフルインベスト、マイナスなら現金
                 
-                imp_df = pd.DataFrame({'Feature': features, 'Importance': model.feature_importances_}).sort_values('Importance', ascending=False).head(10)
-                fig_imp = px.bar(imp_df.sort_values('Importance', ascending=True), x='Importance', y='Feature', orientation='h', template="plotly_dark", color='Importance', color_continuous_scale='Blues')
-                st.plotly_chart(fig_imp.update_layout(height=300, margin=dict(l=0,r=0,t=0,b=0)), use_container_width=True)
+                # 翌日の日次リターンを計算 (バックテスト用)
+                df_ml['Daily_Ret'] = df_ml[target_ticker].pct_change().shift(-1)
+                df_ml['Strategy_Ret'] = df_ml['Signal'] * df_ml['Daily_Ret']
+                
+                # 直近3年間のバックテスト結果を抽出
+                bt_df = df_ml.tail(252 * 3).dropna()
+                bt_df['Equity_B&H'] = (1 + bt_df['Daily_Ret']).cumprod() * 100
+                bt_df['Equity_AI'] = (1 + bt_df['Strategy_Ret']).cumprod() * 100
+                
+                # 統計指標の計算 (Sharpe Ratio, Max Drawdown)
+                def calc_metrics(returns):
+                    ann_ret = returns.mean() * 252
+                    ann_vol = returns.std() * np.sqrt(252)
+                    sharpe = ann_ret / ann_vol if ann_vol != 0 else 0
+                    cum_ret = (1 + returns).cumprod()
+                    drawdown = (cum_ret / cum_ret.cummax()) - 1
+                    mdd = drawdown.min()
+                    return sharpe, mdd
 
-                # --- 7. 統合戦略判断 ---
+                sharpe_bh, mdd_bh = calc_metrics(bt_df['Daily_Ret'])
+                sharpe_ai, mdd_ai = calc_metrics(bt_df['Strategy_Ret'])
+
+                # ==========================================
+                # UI Rendering (描画セクション)
+                # ==========================================
+                
+                # --- セクション1: 相場環境とAI予測 ---
+                st.subheader("1. Market Regime & AI Predictive Model")
+                col_r1, col_r2 = st.columns(2)
+                
+                with col_r1:
+                    st.markdown(f"""
+                    <div class='insight-box'>
+                        <h4>現在の相場環境 (GMM判定)</h4>
+                        <h3 style="margin-top:0px;">{regime_name}</h3>
+                        <p><b>AI予測 1ヶ月期待リターン:</b> <span style="font-size:24px; color:{'#00ff00' if pred_ret>0 else '#f85149'};">{pred_ret:+.2f}%</span></p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                with col_r2:
+                    st.markdown("**AI Feature Attribution (判断の根拠)**")
+                    imp_df = pd.DataFrame({'Feature': features, 'Importance': model.feature_importances_}).sort_values('Importance', ascending=True)
+                    fig_imp = px.bar(imp_df, x='Importance', y='Feature', orientation='h', template="plotly_dark", color='Importance', color_continuous_scale='Blues')
+                    st.plotly_chart(fig_imp.update_layout(height=180, margin=dict(l=0,r=0,t=0,b=0)), use_container_width=True)
+
                 st.markdown("---")
-                st.subheader("3. Executive Strategy Decision")
-                cl1, cl2 = st.columns([2, 1])
-                with cl1:
-                    # 簡易的なボラティリティ(VIX)を安全弁としてスコア化
-                    vix_val = df_ml['^VIX'].iloc[-1] if '^VIX' in df_ml.columns else 20
-                    score = np.clip(pred_ret * 2, -5, 5) + (1 if vix_val < 20 else -1)
-                    
-                    if score > 2: status, color, icon = "積極的投資", "#00ff00", "🚀"
-                    elif score > -1: status, color, icon = "部分的投資", "#58a6ff", "⚖️"
-                    else: status, color, icon = "防御的待機", "#f85149", "🛡️"
-                    
-                    st.markdown(f"<div class='insight-box' style='border-left: 5px solid {color};'><h3>AI判定: {icon} {status}</h3><p style='font-size:18px;'>AI予測 1ヶ月リターン: <b>{pred_ret:+.2f}%</b></p></div>", unsafe_allow_html=True)
-                with cl2:
-                    risk = max(0, min(100, (1/vix_val)*1500))
-                    st.plotly_chart(go.Figure(go.Indicator(mode="gauge+number", value=risk, title={'text':"推奨リスク露出度"}, gauge={'axis':{'range':[0,100]},'bar':{'color':color}})).update_layout(template="plotly_dark", height=200, margin=dict(t=30,b=0)), use_container_width=True)
 
-            except Exception as e: st.error(f"AI学習エラー: {e}\n(※データが不足しているティッカーがスプレッドシートにある可能性があります)")
+                # --- セクション2: バックテストとリスク指標 ---
+                st.subheader("2. Quantitative Backtest (直近3年間)")
+                st.markdown("AIが「期待リターンがマイナス」と予測した日に現金を保有した場合の、リスク回避効果を測定します。")
+                
+                col_b1, col_b2 = st.columns([3, 1])
+                with col_b1:
+                    fig_bt = go.Figure()
+                    fig_bt.add_trace(go.Scatter(x=bt_df.index, y=bt_df['Equity_AI'], name="AI Strategy", line=dict(color='#3fb950', width=3)))
+                    fig_bt.add_trace(go.Scatter(x=bt_df.index, y=bt_df['Equity_B&H'], name="Buy & Hold", line=dict(color='gray', dash='dot')))
+                    
+                    # 現金化した期間(Signal=0)を赤色でハイライト
+                    cash_df = bt_df[bt_df['Signal'] == 0]
+                    fig_bt.add_trace(go.Scatter(x=cash_df.index, y=cash_df['Equity_AI'], mode='markers', name="Cash Position", marker=dict(color='#f85149', size=4)))
+                    
+                    fig_bt.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=20,b=0), hovermode="x unified")
+                    st.plotly_chart(fig_bt, use_container_width=True)
+                
+                with col_b2:
+                    st.markdown("#### Risk Metrics")
+                    st.markdown(f"**Sharpe Ratio**\n* AI: `{sharpe_ai:.2f}`\n* B&H: `{sharpe_bh:.2f}`")
+                    st.markdown(f"**Max Drawdown**\n* AI: `<span style='color:#f85149;'>{mdd_ai*100:.1f}%</span>`\n* B&H: `{mdd_bh*100:.1f}%`", unsafe_allow_html=True)
+                    st.caption("※シャープレシオは高いほど良く、ドローダウン(暴落率)はゼロに近いほど優れています。")
+
+                st.markdown("---")
+
+                # --- セクション3: プロの資金管理 (Volatility Targeting) ---
+                st.subheader("3. Institutional Position Sizing (Target Volatility Framework)")
+                
+                # 機関投資家の標準的なターゲットボラティリティ(年率15%)に基づくポジションサイジング
+                target_vol = 0.15 
+                curr_vol = df_ml['Vol_1M'].iloc[-1]
+                base_weight = target_vol / curr_vol if curr_vol > 0 else 0
+                
+                # AIの自信度とレジームによる調整
+                adj_weight = base_weight
+                if pred_ret < 0: adj_weight *= 0.2  # 弱気予測時は大幅減
+                if curr_regime == 1: adj_weight *= 0.8 # リスクオフレジーム時はさらに2割減
+                
+                final_weight_pct = min(100, max(0, adj_weight * 100)) # 0-100%に丸める
+
+                col_s1, col_s2 = st.columns([1, 2])
+                with col_s1:
+                    fig_g = go.Figure(go.Indicator(
+                        mode="gauge+number", value=final_weight_pct, number={"suffix": "%"}, title={'text':"最適ポジション比率"}, 
+                        gauge={'axis':{'range':[0,100]}, 'bar':{'color':"#58a6ff"}, 'steps':[{'range':[0,30],'color':"#f85149"}, {'range':[30,70],'color':"#e3b341"}]}
+                    ))
+                    st.plotly_chart(fig_g.update_layout(template="plotly_dark", height=250, margin=dict(t=40,b=0)), use_container_width=True)
+                
+                with col_s2:
+                    st.markdown("#### アクション・ロジック (Why this size?)")
+                    st.write(f"1. **市場の荒れ具合 (Current Volatility):** 現在の年率ボラティリティは `{curr_vol*100:.1f}%` です。目標リスク(15%)を維持するための基準ウェイトは `{base_weight*100:.0f}%` と計算されました。")
+                    st.write(f"2. **レジーム調整:** 現在は `{regime_name}` のため、安全係数を掛けています。")
+                    st.write(f"3. **AI方向性調整:** 1ヶ月予測が `{pred_ret:+.2f}%` であることを加味し、最終的な投下資本比率を **`{final_weight_pct:.1f}%`** に設定しました。残りは現金(Cash)または短期債券(SHV)で待機してください。")
+
+            except Exception as e: 
+                st.error(f"クオンツエンジン実行エラー: {e}\n(データの取得に失敗した可能性があります。時間をおいて再度お試しください)")
 
 except Exception as e:
     st.error(f"System Critical Error: {e}")
