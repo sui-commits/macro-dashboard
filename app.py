@@ -313,8 +313,12 @@ try:
             fig_gauge.update_layout(height=250, template="plotly_dark", margin=dict(l=20,r=20,t=40,b=20))
             st.plotly_chart(fig_gauge, use_container_width=True)
 
-            st.markdown("#### 📝 具体的な戦略案")
+           st.markdown("#### 📝 具体的な戦略案")
             if status == "積極的投資 (Aggressive)":
-                st.write("・SPYへのロングポジションを構築
+                st.write("・SPYへのロングポジションを構築。\n・強気トレンドが維持されているため、押し目買いを継続。\n・ボラティリティ低下によるガンマショート戦略も検討。")
+            elif status == "部分的投資 (Cautious Long)":
+                st.write("・主力株の比率を抑え、ディフェンシブセクターを混合。\n・ボラティリティの急増に備え、プットオプションでのヘッジを推奨。")
+            else:
+                st.write("・現金を主体とし、嵐が過ぎるのを待つ。\n・VIX指数のスパイクを確認してから打診買いを検討。\n・ショートポジションまたはベアETFの活用を検討。")
 except Exception as e:
     st.error(f"System Error: {e}")
