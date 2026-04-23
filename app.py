@@ -200,64 +200,90 @@ try:
                 st.plotly_chart(fig, use_container_width=True)
             except Exception as e: st.error(e)
 
-# ==========================================
-    # PAGE 4: Advanced Investment Strategy & AI Analysis
+    # ==========================================
+    # PAGE 4: Investment Strategy (乖離分析セクション追加版)
     # ==========================================
     elif page == "4. Investment Strategy":
         st.title("🧭 Professional Investment Strategy & AI Predictor")
-        st.markdown("マクロ、需給、機械学習を統合し、具体的な『投資アクション』を導き出します。")
-
-        # --- データ取得と特徴量エンジニアリング ---
+        
+        # --- (中略：データ取得・モデル学習ロジックは前回と同じ) ---
         with st.spinner('クオンツモデルを構築中...'):
             try:
-                # 10年分の多角的なデータを取得
+                # データの取得と特徴量生成
                 spy = yf.Ticker("SPY").history(period="10y")['Close'].rename("SPY")
                 vix = yf.Ticker("^VIX").history(period="10y")['Close'].rename("VIX")
                 dxy = yf.Ticker("DX-Y.NYB").history(period="10y")['Close'].rename("USD")
                 t10y2y = fred.get_series("T10Y2Y").rename("Yield_Curve")
                 hy = fred.get_series("BAMLH0A0HYM2").rename("HY_Spread")
                 
-                # 同期処理
                 df_pro = pd.concat([spy, vix, dxy, t10y2y, hy], axis=1)
                 df_pro.index = pd.to_datetime(df_pro.index).tz_localize(None).normalize()
                 df_pro = df_pro.ffill().dropna()
 
-                # ★ 高度な特徴量生成 (Advanced Feature Engineering)
-                # 1. モメンタム（勢い）
+                # 特徴量生成
                 df_pro['Mom_1m'] = df_pro['SPY'].pct_change(21)
                 df_pro['RSI'] = (df_pro['SPY'].diff().apply(lambda x: x if x > 0 else 0).rolling(14).mean() / 
                                  df_pro['SPY'].diff().abs().rolling(14).mean()) * 100
-                
-                # 2. ボラティリティ（リスク環境）
                 df_pro['Vol_21d'] = df_pro['SPY'].pct_change().rolling(21).std() * np.sqrt(252)
-                
-                # 3. 相関の変化（マクロの連動性）
                 df_pro['Stock_Bond_Corr'] = df_pro['SPY'].rolling(63).corr(df_pro['Yield_Curve'])
-                
-                # ターゲット: 21営業日後のリターン
                 df_pro['Target_Return'] = df_pro['SPY'].pct_change(21).shift(-21)
                 
-                # 学習準備
                 features = ['VIX', 'USD', 'Yield_Curve', 'HY_Spread', 'Mom_1m', 'RSI', 'Vol_21d', 'Stock_Bond_Corr']
                 df_train = df_pro.dropna()
                 X = df_train[features]
                 y = df_train['Target_Return']
                 
-                # 最新トレンド重視の重み付け学習
-                weights = np.exp(np.linspace(-1, 0, len(X))) # 直近ほど指数関数的に重く
+                # 重み付け学習 (最新トレンド重視)
+                weights = np.exp(np.linspace(-1, 0, len(X)))
                 model = RandomForestRegressor(n_estimators=200, max_depth=10, random_state=42)
                 model.fit(X, y, sample_weight=weights)
                 
                 # 未来予測
                 latest_x = df_pro[features].iloc[-1:]
                 pred_return = model.predict(latest_x)[0] * 100
+                pred_price = df_pro['SPY'].iloc[-1] * (1 + (pred_return / 100))
                 
             except Exception as e:
-                st.error(f"データ処理エラー: {e}")
+                st.error(f"Error: {e}")
 
-       except Exception as e:
-    st.error(f"System Error: {e}")
-# --- 統合ダッシュボードレイアウト ---
+        # --- 🆕 追加セクション: Market vs AI Gap Analysis ---
+        st.markdown("---")
+        st.subheader("分析 1: Market vs AI Gap Analysis (理論と現実の乖離)")
+        
+        col_gap1, col_gap2 = st.columns([2, 1])
+        
+        with col_gap1:
+            # 直近20日間の「市場価格」と「AIの理論上の予測価格」の推移を比較
+            test_df = df_pro.tail(40).copy()
+            # 過去の各時点での特徴量から「当時のAI予測」を算出（リプレイ）
+            test_features = test_df[features]
+            test_df['AI_Fair_Value'] = model.predict(test_features) * test_df['SPY'] + test_df['SPY']
+            
+            fig_gap = go.Figure()
+            fig_gap.add_trace(go.Scatter(x=test_df.index, y=test_df['SPY'], name="Market Price (市場価格)", line=dict(color='#ff4b4b', width=3)))
+            fig_gap.add_trace(go.Scatter(x=test_df.index, y=test_df['AI_Fair_Value'], name="AI Theoretical Value (AI理論値)", line=dict(color='#58a6ff', dash='dot')))
+            
+            fig_gap.update_layout(title="市場価格 vs AI適正水準の推移", template="plotly_dark", height=350, margin=dict(l=0,r=0,t=40,b=0))
+            st.plotly_chart(fig_gap, use_container_width=True)
+
+        with col_gap2:
+            # 乖離率(Spread)の計算
+            current_actual = df_pro['SPY'].iloc[-1]
+            gap_pct = ((current_actual - test_df['AI_Fair_Value'].iloc[-1]) / test_df['AI_Fair_Value'].iloc[-1]) * 100
+            
+            st.metric(label="理論値からの乖離率 (Spread)", value=f"{gap_pct:+.2f}%")
+            
+            if gap_pct > 3:
+                st.warning("⚠️ **Euphoria (過熱):** 市場がAIの論理を超えて買われています。短期的な調整、または『踏み上げ』のサインです。")
+            elif gap_pct < -3:
+                st.success("✅ **Undervalued (割安):** マクロ指標に比べて売られすぎ。リバウンドの好機かもしれません。")
+            else:
+                st.info("⚖️ **Fair (適正):** 市場はマクロ指標を適正に織り込んでいます。")
+
+        # --- 統合投資判断と戦略案 (前回同様) ---
+        st.markdown("---")
+        st.subheader("分析 2: 統合投資判断 (Executive Summary)")
+        # --- 統合ダッシュボードレイアウト ---
         col_main, col_sub = st.columns([2, 1])
 
         with col_main:
@@ -283,7 +309,7 @@ try:
             st.markdown(f"""
             <div style="background-color:#161b22; padding:20px; border-radius:10px; border-left:10px solid {color};">
                 <h2 style="color:{color};">{icon} {status}</h2>
-                <p style="font-size:18px;"><b>AI予測 1ヶ月リターン:</b> {pred_return:+.2f}%</p>
+                <p style="font-size:18px;"><b>AI予測 1ヶ月期待リターン:</b> {pred_return:+.2f}%</p>
                 <p><b>現在のマクロ環境:</b> {'健全' if hy_now < 4 else 'ストレス増大'} (HY Spread: {hy_now:.2f}%)</p>
                 <p><b>テクニカル過熱度:</b> {'過熱感あり' if rsi_now > 70 else '調整済み' if rsi_now < 30 else '中立'} (RSI: {rsi_now:.1f})</p>
             </div>
