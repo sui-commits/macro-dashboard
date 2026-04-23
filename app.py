@@ -122,35 +122,90 @@ try:
     # ==========================================
     elif page == "2. Asset Class Macro (アセット別分析)":
         st.title("🏦 Asset Class Macro Analysis")
-        # スイング相関
-        st.markdown("### 🔗 Swing Correlation Matrix (1W/1H)")
-        assets = {'SPY':'Stock', 'TLT':'Bond', 'GLD':'Gold', 'USO':'Oil', 'UUP':'Dollar', 'BTC-USD':'Crypto'}
-        c_data = yf.download(list(assets.keys()), period="1wk", interval="1h", progress=False)['Close'].rename(columns=assets).corr()
-        st.plotly_chart(px.imshow(c_data, text_auto=True, color_continuous_scale='RdBu_r', template="plotly_dark", height=400), use_container_width=True)
+        st.markdown("各アセット（株・債券・金・原油・仮想通貨）を動かす根源的なマクロ指標との相関と乖離を分析します。")
 
-        tabs_names = [t for t in settings_df['タブ名'].unique() if "ダッシュボード" not in t]
+        # スイング相関マトリックス
+        st.markdown("### 🔗 Swing Correlation Matrix (1W/1H)")
+        try:
+            assets = {'SPY':'Stock', 'TLT':'Bond', 'GLD':'Gold', 'USO':'Oil', 'UUP':'Dollar', 'BTC-USD':'Crypto'}
+            c_data = yf.download(list(assets.keys()), period="1wk", interval="1h", progress=False)['Close'].rename(columns=assets).corr()
+            st.plotly_chart(px.imshow(c_data, text_auto=True, color_continuous_scale='RdBu_r', template="plotly_dark", height=400), use_container_width=True)
+        except Exception as e:
+            st.warning("相関マトリックスのデータ取得に失敗しました。")
+
+        # ★ 修正ポイント1: 制限を解除し、スプレッドシートに登録されたすべてのタブを表示
+        tabs_names = settings_df['タブ名'].unique()
         tabs = st.tabs(tabs_names)
+        
         for i, t_name in enumerate(tabs_names):
             with tabs[i]:
                 t_df = settings_df[settings_df['タブ名'] == t_name]
                 cols = st.columns(2)
                 for g_idx, g_name in enumerate(t_df['グラフ名'].unique()):
                     with cols[g_idx % 2]:
-                        fig = make_subplots(specs=[[{"secondary_y": True}]])
-                        g_data, max_dt = t_df[t_df['グラフ名'] == g_name], None
-                        for _, r in g_data.iterrows():
+                        g_data = t_df[t_df['グラフ名'] == g_name]
+                        fig = None
+                        
+                        # ★ 修正ポイント2: CTA専用のグラフ描画ロジックを追加
+                        if len(g_data) == 1 and g_data.iloc[0]['ソース'] == 'CTA':
+                            r = g_data.iloc[0]
                             try:
-                                d = None
-                                if r['ソース'] == 'FRED': d = fred.get_series(r['ティッカー']).loc['2022-01-01':]
-                                elif r['ソース'] == 'Yahoo': d = yf.Ticker(r['ティッカー']).history(start='2022-01-01')['Close']
-                                elif r['ソース'] == 'DBnomics': d = fetch_series(r['ティッカー']).set_index('period')['value']
-                                if d is not None:
-                                    d.index = pd.to_datetime(d.index).tz_localize(None)
-                                    if max_dt is None or d.index.max() > max_dt: max_dt = d.index.max()
-                                    fig.add_trace(go.Scatter(x=d.index, y=d.values, name=r['データ名']), secondary_y=(r['軸']=='副軸'))
+                                d = yf.Ticker(r['ティッカー']).history(period="2y")
+                                d.index = pd.to_datetime(d.index).tz_localize(None)
+                                d['SMA200'] = d['Close'].rolling(200).mean()
+                                fig = go.Figure()
+                                fig.add_trace(go.Scatter(x=d.index, y=d['Close'], name='Price', line=dict(color='#c9d1d9')))
+                                fig.add_trace(go.Scatter(x=d.index, y=d['SMA200'], name='200 SMA', line=dict(color='#ff4b4b', dash='dot')))
+                                max_d = d.index.max()
+                                fig.update_xaxes(range=[max_d - pd.DateOffset(months=12), max_d])
+                                fig.update_layout(title=f"🤖 {g_name} (CTA Trend)", height=300, template="plotly_dark", margin=dict(l=0,r=0,t=30,b=0))
                             except: pass
-                        if max_dt: fig.update_xaxes(range=[max_dt - pd.DateOffset(months=6), max_dt])
-                        st.plotly_chart(fig.update_layout(title=g_name, height=300, template="plotly_dark"), use_container_width=True)
+
+                        # ★ 修正ポイント3: Options専用のグラフ描画ロジックを追加
+                        elif len(g_data) == 1 and g_data.iloc[0]['ソース'] == 'Options':
+                            r = g_data.iloc[0]
+                            try:
+                                s = yf.Ticker(r['ティッカー'])
+                                exp = s.options[0]
+                                c, p = s.option_chain(exp).calls, s.option_chain(exp).puts
+                                strikes = sorted(list(set(c['strike']).union(set(p['strike']))))
+                                mp, min_l = 0, float('inf')
+                                for strk in strikes:
+                                    l = c[c['strike']<strk].apply(lambda x:(strk-x['strike'])*x['openInterest'], axis=1).sum() + p[p['strike']>strk].apply(lambda x:(x['strike']-strk)*x['openInterest'], axis=1).sum()
+                                    if l < min_l: min_l, mp = l, strk
+                                curr = s.history(period='1d')['Close'].iloc[-1]
+                                fig = go.Figure()
+                                fig.add_trace(go.Bar(x=c['strike'], y=c['openInterest'], name='Call', marker_color='#58a6ff'))
+                                fig.add_trace(go.Bar(x=p['strike'], y=p['openInterest'], name='Put', marker_color='#f85149'))
+                                fig.add_vline(x=mp, line_dash="dash", line_color="yellow")
+                                fig.add_vline(x=curr, line_dash="solid", line_color="#3fb950")
+                                fig.update_layout(title=f"🎯 {g_name} (Max Pain: {mp:.0f})", height=300, template="plotly_dark", barmode='group', margin=dict(l=0,r=0,t=30,b=0))
+                            except: pass
+
+                        # 通常の折れ線グラフ (FRED, Yahoo, DBnomics)
+                        else:
+                            fig = make_subplots(specs=[[{"secondary_y": True}]])
+                            max_dt = None
+                            for _, r in g_data.iterrows():
+                                try:
+                                    d = None
+                                    if r['ソース'] == 'FRED': d = fred.get_series(r['ティッカー']).loc['2022-01-01':]
+                                    elif r['ソース'] == 'Yahoo': d = yf.Ticker(r['ティッカー']).history(start='2022-01-01')['Close']
+                                    elif r['ソース'] == 'DBnomics': 
+                                        db_df = fetch_series(r['ティッカー'])
+                                        if not db_df.empty: d = db_df[['period', 'value']].dropna().set_index('period')['value']
+                                    
+                                    if d is not None and not d.empty:
+                                        d.index = pd.to_datetime(d.index).tz_localize(None)
+                                        if max_dt is None or d.index.max() > max_dt: max_dt = d.index.max()
+                                        fig.add_trace(go.Scatter(x=d.index, y=d.values, name=r['データ名']), secondary_y=(r['軸']=='副軸'))
+                                except: pass
+                            if max_dt: fig.update_xaxes(range=[max_dt - pd.DateOffset(years=2), max_dt])
+                            fig.update_layout(title=g_name, height=300, template="plotly_dark", hovermode="x unified", margin=dict(l=0,r=0,t=30,b=0))
+                        
+                        # グラフが生成された場合のみ描画
+                        if fig is not None:
+                            st.plotly_chart(fig, use_container_width=True)
 
     # ==========================================
     # PAGE 3: Historical Analysis (過去比較)
