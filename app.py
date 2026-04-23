@@ -255,7 +255,9 @@ try:
             except Exception as e:
                 st.error(f"データ処理エラー: {e}")
 
-        # --- 統合ダッシュボードレイアウト ---
+       except Exception as e:
+    st.error(f"System Error: {e}")
+# --- 統合ダッシュボードレイアウト ---
         col_main, col_sub = st.columns([2, 1])
 
         with col_main:
@@ -267,7 +269,7 @@ try:
             rsi_now = df_pro['RSI'].iloc[-1]
             
             # スコアリング算出
-            ai_score = np.clip(pred_return * 2, -5, 5) # AIリターンを5点満点でスコア化
+            ai_score = np.clip(pred_return * 2, -5, 5)
             macro_score = (1 if hy_now < 4 else -1) + (1 if vix_now < 20 else -1)
             total_score = ai_score + macro_score
             
@@ -296,9 +298,8 @@ try:
 
         with col_sub:
             st.markdown("### 📊 推奨ポジション比率")
-            # リスク調整後の比率算出 (VIXが高いほどキャッシュを増やす)
-            risk_budget = max(0, min(100, (1 / vix_now) * 1500)) # 簡易的なボラティリティ・ターゲティング
-            if pred_return < 0: risk_budget *= 0.5 # 予測がマイナスなら比率を半分に
+            risk_budget = max(0, min(100, (1 / vix_now) * 1500))
+            if pred_return < 0: risk_budget *= 0.5
             
             fig_gauge = go.Figure(go.Indicator(
                 mode = "gauge+number",
@@ -313,12 +314,10 @@ try:
             fig_gauge.update_layout(height=250, template="plotly_dark", margin=dict(l=20,r=20,t=40,b=20))
             st.plotly_chart(fig_gauge, use_container_width=True)
 
-           st.markdown("#### 📝 具体的な戦略案")
+            st.markdown("#### 📝 具体的な戦略案")
             if status == "積極的投資 (Aggressive)":
                 st.write("・SPYへのロングポジションを構築。\n・強気トレンドが維持されているため、押し目買いを継続。\n・ボラティリティ低下によるガンマショート戦略も検討。")
             elif status == "部分的投資 (Cautious Long)":
                 st.write("・主力株の比率を抑え、ディフェンシブセクターを混合。\n・ボラティリティの急増に備え、プットオプションでのヘッジを推奨。")
             else:
                 st.write("・現金を主体とし、嵐が過ぎるのを待つ。\n・VIX指数のスパイクを確認してから打診買いを検討。\n・ショートポジションまたはベアETFの活用を検討。")
-except Exception as e:
-    st.error(f"System Error: {e}")
