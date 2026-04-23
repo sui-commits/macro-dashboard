@@ -368,4 +368,4 @@ try:
 """
                 st.code(llm_prompt, language="text")
 
-    except Exception as e: st.error(f"分析エラー: {e}")
+            except Exception as e: st.error(f"分析エラー: {e}")
