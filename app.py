@@ -224,7 +224,8 @@ try:
                     s.index = pd.to_datetime(s.index).tz_localize(None).normalize()
 
                 # タイムゾーンを消したクリーンな状態で結合
-                df_ml = pd.concat(series_list, axis=1).fillna(method='ffill')
+                # fillna(method='ffill') を ffill() に書き換え
+                df_ml = pd.concat(series_list, axis=1).ffill()
                 # 特徴量エンジニアリング
                 df_ml['SPY_Ret_1m'] = df_ml['SPY'].pct_change(21) * 100
                 df_ml['VIX_SMA20'] = df_ml['VIX'].rolling(20).mean()
