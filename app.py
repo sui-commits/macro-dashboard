@@ -639,6 +639,131 @@ try:
             except Exception as e: 
                 st.error(f"イベント特定エラー: {e}")
     # ==========================================
+    # PAGE 6: Portfolio Optimization (Black-Litterman)
+    # ==========================================
+    elif page == "6. Portfolio Optimization (アロケーション)":
+        st.title("⚖️ Black-Litterman Portfolio Optimizer")
+        st.markdown("市場の均衡リターンと、AIエンジンの独自予測をベイズ推定で統合し、Max Sharpeとなる最適ウェイトを算出します。")
+
+        with st.spinner('Calculating Covariance Matrix & Black-Litterman Posteriors...'):
+            try:
+                assets = {'SPY': 'Equities', 'TLT': 'Bonds', 'GLD': 'Gold', 'USO': 'Commodities'}
+                tickers = list(assets.keys())
+                
+                prices = fetch_market_data(tickers, period="5y")
+                returns = prices.pct_change().dropna()
+                
+                cov_matrix = returns.cov() * 252
+                mkt_weights = np.array([0.60, 0.20, 0.10, 0.10])
+                
+                risk_free_rate = 0.04 
+                spy_ret = returns['SPY'].mean() * 252
+                spy_var = returns['SPY'].var() * 252
+                risk_aversion = (spy_ret - risk_free_rate) / spy_var
+                
+                pi = risk_aversion * np.dot(cov_matrix, mkt_weights)
+                
+                views = []
+                confidences = []
+                for tic in tickers:
+                    ret_3m = (prices[tic].iloc[-1] / prices[tic].iloc[-63]) - 1
+                    vol_1m = returns[tic].tail(21).std() * np.sqrt(252)
+                    view_ret = (ret_3m * 4) * 0.5 + (pi[tickers.index(tic)] * 0.5) 
+                    views.append(view_ret)
+                    confidences.append(1.0 / (vol_1m + 0.01))
+
+                Q = np.array(views)
+                P = np.eye(len(tickers)) 
+                tau = 0.05 
+                omega = np.diag([(tau * cov_matrix.iloc[i, i]) / confidences[i] for i in range(len(tickers))])
+
+                tau_cov_inv = la.inv(tau * cov_matrix)
+                omega_inv = la.inv(omega)
+                
+                bl_expected_returns = np.dot(
+                    la.inv(tau_cov_inv + np.dot(np.dot(P.T, omega_inv), P)),
+                    np.dot(tau_cov_inv, pi) + np.dot(np.dot(P.T, omega_inv), Q)
+                )
+
+                def get_ret_vol_sr(weights, exp_returns):
+                    weights = np.array(weights)
+                    port_ret = np.sum(exp_returns * weights)
+                    port_vol = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
+                    sr = (port_ret - risk_free_rate) / port_vol
+                    return np.array([port_ret, port_vol, sr])
+
+                def neg_sharpe(weights, exp_returns): return -get_ret_vol_sr(weights, exp_returns)[2]
+                def check_sum(weights): return np.sum(weights) - 1
+
+                constraints = ({'type': 'eq', 'fun': check_sum})
+                bounds = tuple((0.0, 1.0) for _ in range(len(tickers)))
+                init_guess = len(tickers) * [1.0 / len(tickers)]
+
+                opt_results_bl = sco.minimize(neg_sharpe, init_guess, args=(bl_expected_returns,), method='SLSQP', bounds=bounds, constraints=constraints)
+                opt_weights_bl = opt_results_bl.x
+
+                c1, c2, c3 = st.columns(3)
+                bl_stats = get_ret_vol_sr(opt_weights_bl, bl_expected_returns)
+                mkt_stats = get_ret_vol_sr(mkt_weights, pi)
+
+                c1.markdown(f"""<div class='kpi-card'>
+                    <div class='kpi-title'>Expected Portfolio Return</div>
+                    <div class='kpi-value' style='color:#3fb950'>{bl_stats[0]*100:.1f}%</div>
+                    <div class='kpi-sub'>Market Baseline: {mkt_stats[0]*100:.1f}%</div>
+                </div>""", unsafe_allow_html=True)
+
+                c2.markdown(f"""<div class='kpi-card'>
+                    <div class='kpi-title'>Portfolio Volatility (Risk)</div>
+                    <div class='kpi-value' style='color:#f85149'>{bl_stats[1]*100:.1f}%</div>
+                    <div class='kpi-sub'>Market Baseline: {mkt_stats[1]*100:.1f}%</div>
+                </div>""", unsafe_allow_html=True)
+
+                c3.markdown(f"""<div class='kpi-card'>
+                    <div class='kpi-title'>Ex-Ante Sharpe Ratio</div>
+                    <div class='kpi-value' style='color:#a371f7'>{bl_stats[2]:.2f}</div>
+                    <div class='kpi-sub'>Market Baseline: {mkt_stats[2]:.2f}</div>
+                </div>""", unsafe_allow_html=True)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                st.subheader("Asset Allocation: Market Equilibrium vs AI Black-Litterman")
+                df_weights = pd.DataFrame({
+                    'Asset': [assets[t] for t in tickers],
+                    'Market Neutral (60/40 basis)': mkt_weights * 100,
+                    'AI Optimized (Max Sharpe)': opt_weights_bl * 100
+                }).melt(id_vars='Asset', var_name='Strategy', value_name='Weight (%)')
+
+                fig_weights = px.bar(df_weights, x='Asset', y='Weight (%)', color='Strategy', barmode='group', 
+                                     color_discrete_sequence=['#8b949e', '#58a6ff'], template="plotly_dark")
+                fig_weights.update_layout(height=400, margin=dict(l=0,r=0,t=30,b=0))
+                st.plotly_chart(fig_weights, use_container_width=True)
+
+                st.markdown("---")
+                st.subheader("Expected Return Shift (AI Views Impact)")
+                
+                df_ret_shift = pd.DataFrame({
+                    'Asset': [assets[t] for t in tickers],
+                    'Implied (Market)': pi * 100,
+                    'AI View (Raw Prediction)': Q * 100,
+                    'Black-Litterman Posterior': bl_expected_returns * 100
+                })
+                
+                fig_shift = go.Figure()
+                fig_shift.add_trace(go.Scatter(x=df_ret_shift['Asset'], y=df_ret_shift['Implied (Market)'], name='Market Implied', mode='markers', marker=dict(size=12, symbol='circle-open', color='gray')))
+                fig_shift.add_trace(go.Scatter(x=df_ret_shift['Asset'], y=df_ret_shift['AI View (Raw Prediction)'], name='AI Raw View', mode='markers', marker=dict(size=12, symbol='x', color='#f85149')))
+                fig_shift.add_trace(go.Scatter(x=df_ret_shift['Asset'], y=df_ret_shift['Black-Litterman Posterior'], name='BL Posterior (Final)', mode='markers', marker=dict(size=16, symbol='star', color='#3fb950')))
+                
+                for i in range(len(tickers)):
+                    fig_shift.add_annotation(x=df_ret_shift['Asset'][i], y=df_ret_shift['Black-Litterman Posterior'][i],
+                                             ax=df_ret_shift['Asset'][i], ay=df_ret_shift['Implied (Market)'][i],
+                                             xref='x', yref='y', axref='x', ayref='y', showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=2, arrowcolor='#8b949e')
+
+                fig_shift.update_layout(template="plotly_dark", height=400, margin=dict(l=0,r=0,t=10,b=0), yaxis_title="Expected Return (Annualized %)")
+                st.plotly_chart(fig_shift, use_container_width=True)
+
+            except Exception as e:
+                st.error(f"最適化エンジンのエラー: {e}")
+    # ==========================================
     # PAGE 7: Macro Data Explorer
     # ==========================================
     elif page == "7. Macro Data Explorer (マクロ生データ確認)":
