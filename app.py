@@ -728,11 +728,13 @@ try:
 
             except Exception as e: st.error(f"分析モデル・エラー: {e}\n(追加モジュール scikit-learn が必要です。)")
 
-    # ==========================================
-    # PAGE 5: Headline Reverse-Engineering
+# ==========================================
+    # PAGE 5: Headline Reverse-Engineering (イベント逆引き)
     # ==========================================
     elif page == "5. Headline Reverse-Engineering (イベント逆引き)":
         st.title("🗞️ Volatility Anomaly & Reverse-Engineering")
+        st.markdown("株価が統計的な異常反応（3シグマ級の変動）を示した日を数学的に特定し、LLMを使ってその背景にあるニュースヘッドラインを逆引きします。")
+
         lookback_months = st.slider("分析期間 (ヶ月)", 1, 12, 6)
         
         with st.spinner('市場の異常変動日を検出中...'):
@@ -767,8 +769,11 @@ try:
 """
                     st.code(llm_event_prompt, language="text")
 
-            except Exception as e: st.error(f"イベント特定エラー: {e}")
-# ==========================================
+            except Exception as e: 
+                st.error(f"イベント特定エラー: {e}")
+
+
+    # ==========================================
     # PAGE 6: Institutional Portfolio Optimizer (Black-Litterman)
     # ==========================================
     elif page == "6. Portfolio Optimization (アロケーション)":
@@ -793,50 +798,32 @@ try:
                 returns = prices.pct_change().dropna()
                 
                 # --- 2. 基礎統計量の計算 ---
-                # 年率化共分散行列 (Sigma)
                 cov_matrix = returns.cov() * 252
-                
-                # 市場の時価総額ウェイト（簡易的な均衡状態の仮定: 株60%, 債券20%, 金10%, コモ10%）
                 mkt_weights = np.array([0.60, 0.20, 0.10, 0.10])
                 
-                # リスク回避係数 (Risk Aversion: デルタ) - SPYのヒストリカルリターンと分散から逆算
-                risk_free_rate = 0.04 # 4%
+                risk_free_rate = 0.04 
                 spy_ret = returns['SPY'].mean() * 252
                 spy_var = returns['SPY'].var() * 252
                 risk_aversion = (spy_ret - risk_free_rate) / spy_var
                 
-                # 市場の均衡期待リターン (Pi = risk_aversion * CovMatrix * mkt_weights)
                 pi = risk_aversion * np.dot(cov_matrix, mkt_weights)
                 
-                # --- 3. AI Views (クオンツモデルの独自予測) の生成 ---
-                # ※実運用ではPage4のモデルを各アセットに走らせますが、ここではモメンタムとマクロ相関から動的Viewを生成
+                # --- 3. AI Views の生成 ---
                 views = []
                 confidences = []
-                
                 for tic in tickers:
-                    # 簡易View: 3ヶ月リターンとボラティリティに基づく予測
                     ret_3m = (prices[tic].iloc[-1] / prices[tic].iloc[-63]) - 1
                     vol_1m = returns[tic].tail(21).std() * np.sqrt(252)
-                    
-                    # AIの期待リターン (年率換算)
                     view_ret = (ret_3m * 4) * 0.5 + (pi[tickers.index(tic)] * 0.5) 
                     views.append(view_ret)
-                    
-                    # AIの確信度 (ボラティリティの逆数。荒れているアセットほどAIの自信は低いとする)
                     confidences.append(1.0 / (vol_1m + 0.01))
 
                 Q = np.array(views)
-                P = np.eye(len(tickers)) # 各アセットの絶対予測行列
-                
-                # スケーリングファクター (tau: 過去データの不確実性)
+                P = np.eye(len(tickers)) 
                 tau = 0.05 
-                
-                # 予測の不確実性行列 (Omega)
-                # AIの確信度に基づいて、対角成分のみを持つ行列を作成
                 omega = np.diag([(tau * cov_matrix.iloc[i, i]) / confidences[i] for i in range(len(tickers))])
 
                 # --- 4. Black-Litterman 事後期待リターンの計算 ---
-                # BL公式: E[R] = [(tau*Sigma)^-1 + P^T*Omega^-1*P]^-1 * [(tau*Sigma)^-1*Pi + P^T*Omega^-1*Q]
                 tau_cov_inv = la.inv(tau * cov_matrix)
                 omega_inv = la.inv(omega)
                 
@@ -845,7 +832,7 @@ try:
                     np.dot(tau_cov_inv, pi) + np.dot(np.dot(P.T, omega_inv), Q)
                 )
 
-                # --- 5. Mean-Variance Optimization (最大シャープレシオの探索) ---
+                # --- 5. Mean-Variance Optimization ---
                 def get_ret_vol_sr(weights, exp_returns):
                     weights = np.array(weights)
                     port_ret = np.sum(exp_returns * weights)
@@ -853,24 +840,15 @@ try:
                     sr = (port_ret - risk_free_rate) / port_vol
                     return np.array([port_ret, port_vol, sr])
 
-                def neg_sharpe(weights, exp_returns):
-                    return -get_ret_vol_sr(weights, exp_returns)[2]
-                
-                def check_sum(weights):
-                    return np.sum(weights) - 1
+                def neg_sharpe(weights, exp_returns): return -get_ret_vol_sr(weights, exp_returns)[2]
+                def check_sum(weights): return np.sum(weights) - 1
 
-                # 最適化の制約 (ウェイトの合計=1, 各ウェイトは0%〜100%のロングオンリー)
                 constraints = ({'type': 'eq', 'fun': check_sum})
                 bounds = tuple((0.0, 1.0) for _ in range(len(tickers)))
                 init_guess = len(tickers) * [1.0 / len(tickers)]
 
-                # Black-Littermanリターンを用いた最適化
                 opt_results_bl = sco.minimize(neg_sharpe, init_guess, args=(bl_expected_returns,), method='SLSQP', bounds=bounds, constraints=constraints)
                 opt_weights_bl = opt_results_bl.x
-
-                # 比較用：市場の均衡リターンのみを用いた最適化
-                opt_results_mkt = sco.minimize(neg_sharpe, init_guess, args=(pi,), method='SLSQP', bounds=bounds, constraints=constraints)
-                opt_weights_mkt = opt_results_mkt.x
 
                 # --- 6. UI Rendering ---
                 c1, c2, c3 = st.columns(3)
@@ -913,7 +891,6 @@ try:
                 # --- 事前・事後リターンのシフト ---
                 st.markdown("---")
                 st.subheader("Expected Return Shift (AI Views Impact)")
-                st.markdown("市場が織り込んでいるリターン（Equilibrium）に対し、AIの予測（Views）がどう介入して期待値を引き上げたか（または下げたか）を可視化します。")
                 
                 df_ret_shift = pd.DataFrame({
                     'Asset': [assets[t] for t in tickers],
@@ -927,7 +904,6 @@ try:
                 fig_shift.add_trace(go.Scatter(x=df_ret_shift['Asset'], y=df_ret_shift['AI View (Raw Prediction)'], name='AI Raw View', mode='markers', marker=dict(size=12, symbol='x', color='#f85149')))
                 fig_shift.add_trace(go.Scatter(x=df_ret_shift['Asset'], y=df_ret_shift['Black-Litterman Posterior'], name='BL Posterior (Final)', mode='markers', marker=dict(size=16, symbol='star', color='#3fb950')))
                 
-                # 矢印を描画
                 for i in range(len(tickers)):
                     fig_shift.add_annotation(x=df_ret_shift['Asset'][i], y=df_ret_shift['Black-Litterman Posterior'][i],
                                              ax=df_ret_shift['Asset'][i], ay=df_ret_shift['Implied (Market)'][i],
@@ -936,11 +912,11 @@ try:
                 fig_shift.update_layout(template="plotly_dark", height=400, margin=dict(l=0,r=0,t=10,b=0), yaxis_title="Expected Return (Annualized %)")
                 st.plotly_chart(fig_shift, use_container_width=True)
 
-                st.info("💡 **クオンツ・インサイト:** 星マーク(BL Posterior)が、市場均衡(丸)とAI予測(バツ)の間に位置している点に注目してください。AIの予測に「不確実性」がある場合、ブラック・リッターマン・モデルはAIの予測を100%信用するのではなく、市場のコンセンサス側へ安全に引き戻します。これが機関投資家レベルの厳密なリスクコントロールです。")
-
             except Exception as e:
                 st.error(f"最適化エンジンのエラー: {e}")
 
-# ===== システム全体を囲む try の except =====
+# ==========================================
+# グローバル・エラーハンドリング (システムの終端)
+# ==========================================
 except Exception as e:
     st.error(f"System Critical Error: {e}")
