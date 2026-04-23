@@ -230,203 +230,142 @@ try:
             fig.add_trace(go.Scatter(x=np.arange(-20, len(c_s)-20), y=c_s.values, name="Current", line=dict(width=3, color='#ff4b4b')))
             st.plotly_chart(fig.update_layout(template="plotly_dark", height=500), use_container_width=True)
     # ==========================================
-    # PAGE 4: Institutional Quant Engine & XAI
+    # PAGE 4: Institutional Quant Engine (LLM Integration)
     # ==========================================
     elif page == "4. Investment Strategy (AI戦略)":
         st.title("🧠 Institutional Quant Strategy Engine")
-        st.markdown("グローバル・マクロファンド水準の先行指標群を統合し、AIの思考プロセスをZ-Scoreで可視化します。")
+        st.markdown("マクロ経済、グローバル流動性、需給に特化した予測モデルを構築し、LLM解釈用のプロンプトを出力します。")
 
-        # --- アノマリー切り替えトグル ---
-        anomaly_mode = st.radio(
-            "🇺🇸 モデルの選択 (大統領選サイクル・アノマリーの反映)", 
-            ["除外する (Standard Macro Model)", "反映する (Anomaly-Adjusted Model)"], 
-            horizontal=True
-        )
+        with st.sidebar.expander("🛠️ モデル・パラメータ設定", expanded=True):
+            exclude_other_stocks = st.checkbox("他の株式指数を除外する (推奨)", value=True, help="QQQ, DIAなどの他指数を排除し、マクロと需給のみで説明します。")
+            include_anomaly = st.checkbox("大統領選サイクルを含める", value=False)
+            lookback_years = st.slider("学習期間 (年)", 3, 10, 5)
 
-        with st.spinner('マクロデータ網の構築、アノマリーのパース、および推論を実行中...'):
+        with st.spinner('クオンツ・フィルタリングおよびモデル構築中...'):
             try:
                 target_ticker = "SPY"
                 
-                # --- 1. 基本ティッカー群 ---
+                # --- 1 & 2. データの取得と結合 ---
                 yahoo_tickers = settings_df[settings_df['ソース'] == 'Yahoo']['ティッカー'].unique().tolist()
-                fred_tickers = settings_df[settings_df['ソース'] == 'FRED']['ティッカー'].unique().tolist()
+                market_implied_tickers = ['HG=F', 'GC=F', 'XLY', 'XLP', '^VIX', '^VIX3M']
+                all_yahoo = list(set(yahoo_tickers + market_implied_tickers + [target_ticker]))
 
-                # --- 2. クオンツレベル：超・先行指標群の強制注入 ---
-                market_implied_tickers = ['HG=F', 'GC=F', 'XLY', 'XLP']
-                for tic in market_implied_tickers:
-                    if tic not in yahoo_tickers: yahoo_tickers.append(tic)
-                if target_ticker not in yahoo_tickers: yahoo_tickers.append(target_ticker)
+                pro_fred_tickers = ['ANFCI', 'STLFSI4', 'T10Y3M', 'BAMLH0A0HYM2', 'WALCL', 'M2SL', 'ICSA', 'AWHAEMAN', 'T5YIFR', 'PERMIT', 'UMCSENT']
+                all_fred = list(set(settings_df[settings_df['ソース'] == 'FRED']['ティッカー'].unique().tolist() + pro_fred_tickers))
 
-                # プロ用FRED指標 (流動性、純粋ストレス、労働先行、期待インフレ、住宅、マインド)
-                pro_fred_tickers = [
-                    'ANFCI',        # シカゴ連銀 調整済み金融環境指数
-                    'STLFSI4',      # セントルイス連銀 金融ストレス指数
-                    'T10Y3M',       # イールドカーブ (10年-3ヶ月)
-                    'BAMLH0A0HYM2', # HY債スプレッド
-                    'WALCL',        # FRB総資産 (流動性)
-                    'M2SL',         # M2マネーストック (通貨供給量)
-                    'ICSA',         # 新規失業保険申請件数 (週次)
-                    'AWHAEMAN',     # 製造業 平均週労働時間
-                    'T5YIFR',       # 5年先5年物期待インフレ率
-                    'PERMIT',       # 住宅建築許可件数 (実体経済の最強先行指標)
-                    'UMCSENT'       # ミシガン大消費者態度指数
-                ]
-                for tic in pro_fred_tickers:
-                    if tic not in fred_tickers: fred_tickers.append(tic)
-
-                # --- 3. データのバルク取得 ---
                 series_list = []
-                if yahoo_tickers:
-                    y_data = yf.download(yahoo_tickers, period="5y", progress=False)['Close']
-                    if len(yahoo_tickers) == 1: y_data = pd.DataFrame(y_data, columns=yahoo_tickers)
-                    for col in y_data.columns:
-                        series_list.append(y_data[col].dropna().rename(col))
+                y_data = yf.download(all_yahoo, period=f"{lookback_years}y", progress=False)['Close']
+                if isinstance(y_data, pd.Series): y_data = y_data.to_frame(all_yahoo[0])
+                for col in y_data.columns:
+                    series_list.append(y_data[col].dropna().rename(col))
                 
-                for tic in fred_tickers:
+                for tic in all_fred:
                     try:
-                        series_list.append(fred.get_series(tic).loc['2019-01-01':].dropna().rename(tic))
+                        s = fred.get_series(tic).loc[f"{2024-lookback_years}-01-01":].dropna().rename(tic)
+                        series_list.append(s)
                     except: pass
 
-                # タイムゾーン正規化と結合
                 for i in range(len(series_list)):
                     series_list[i].index = pd.to_datetime(series_list[i].index).tz_localize(None).normalize()
                 df_ml = pd.concat(series_list, axis=1).ffill()
                 
-                # --- 4. 高度な特徴量エンジニアリング ---
-                if 'HG=F' in df_ml.columns and 'GC=F' in df_ml.columns:
-                    df_ml['Copper_Gold_Ratio'] = df_ml['HG=F'] / df_ml['GC=F']
-                if 'XLY' in df_ml.columns and 'XLP' in df_ml.columns:
-                    df_ml['Risk_Appetite_Ratio'] = df_ml['XLY'] / df_ml['XLP']
-
-                df_ml['SPY_Mom_1M'] = df_ml[target_ticker].pct_change(21)
-                df_ml['SPY_Vol_1M'] = df_ml[target_ticker].pct_change().rolling(21).std() * np.sqrt(252)
-                
-                # 大統領選サイクル・アノマリーの計算 (0:選挙年, 1:就任年, 2:中間選挙, 3:選挙前年)
+                # --- 3. 特徴量エンジニアリング ---
+                df_ml['CTA_200D_Bias'] = df_ml[target_ticker] / df_ml[target_ticker].rolling(200).mean() - 1
+                df_ml['Vol_Term_Spread'] = df_ml['^VIX'] / df_ml['^VIX3M']
+                df_ml['Copper_Gold_Ratio'] = df_ml['HG=F'] / df_ml['GC=F']
                 df_ml['Presidential_Cycle'] = df_ml.index.year % 4
-                
-                # Target: 21営業日後(約1ヶ月後)のリターン
                 df_ml['Target'] = df_ml[target_ticker].pct_change(21).shift(-21)
-                
-                # データクレンジング
                 df_train = df_ml.dropna()
-                
-                # 特徴量の選別 (アノマリーモード判定)
-                exclude_cols = ['Target', 'HG=F', 'GC=F', 'XLY', 'XLP']
-                if "除外する" in anomaly_mode:
-                    exclude_cols.append('Presidential_Cycle')
-                
-                features = [col for col in df_train.columns if col not in exclude_cols]
+
+                # --- 4. フィルタリング ---
+                drop_cols = ['Target', 'HG=F', 'GC=F', 'XLY', 'XLP', '^VIX', '^VIX3M']
+                if exclude_other_stocks:
+                    stock_indices = [t for t in yahoo_tickers if t != target_ticker]
+                    drop_cols.extend(stock_indices)
+                if not include_anomaly:
+                    drop_cols.append('Presidential_Cycle')
+
+                features = [col for col in df_train.columns if col not in drop_cols]
                 X, y = df_train[features], df_train['Target']
                 
-                # --- 5. 機械学習 (Random Forest) ---
+                # 学習
                 weights = np.exp(np.linspace(-1, 0, len(X)))
-                model = RandomForestRegressor(n_estimators=200, max_depth=12, min_samples_leaf=3, random_state=42)
-                model.fit(X, y, sample_weight=weights)
+                model = RandomForestRegressor(n_estimators=200, max_depth=10, random_state=42).fit(X, y, sample_weight=weights)
                 
                 latest_x = df_ml[features].iloc[-1:]
                 pred_ret = model.predict(latest_x)[0] * 100
 
-                # --- 6. Explainable AI (Z-Score & Feature Attribution) ---
-                df_3y = df_ml.tail(252 * 3)
+                # Z-Score解析
+                df_3y = df_ml.tail(252*3)
+                macro_only = [f for f in features if f != 'Presidential_Cycle']
+                z_scores = (latest_x[macro_only].iloc[0] - df_3y[macro_only].mean()) / df_3y[macro_only].std()
                 
-                # アノマリー(カテゴリ変数)はZ-Score計算から除外し、マクロ指標のみでZ-Scoreを計算
-                macro_features = [f for f in features if f != 'Presidential_Cycle']
-                z_scores_macro = (latest_x[macro_features].iloc[0] - df_3y[macro_features].mean()) / df_3y[macro_features].std()
-                
-                # 特徴量重要度DFの作成
-                imp_data = []
-                for f, imp in zip(features, model.feature_importances_):
-                    z = z_scores_macro[f] if f in macro_features else 0.0 # サイクル変数は色付けなし(0)とする
-                    imp_data.append({'Feature': f, 'Importance': imp, 'Current_Z_Score': z})
-                
-                imp_df = pd.DataFrame(imp_data).sort_values('Importance', ascending=False).head(12)
+                imp_df = pd.DataFrame({'Feature': features, 'Importance': model.feature_importances_})
+                imp_df['Z_Score'] = imp_df['Feature'].map(z_scores).fillna(0)
+                imp_df = imp_df.sort_values('Importance', ascending=False).head(12)
 
-                # ==========================================
-                # UI Rendering
-                # ==========================================
+                # --- UI表示 ---
+                st.subheader("1. AI Interpretation: Feature Importance")
+                fig_brain = px.bar(imp_df.sort_values('Importance'), x='Importance', y='Feature', orientation='h',
+                                   color='Z_Score', color_continuous_scale='RdBu_r', range_color=[-3, 3], template="plotly_dark")
+                st.plotly_chart(fig_brain.update_layout(height=400, margin=dict(l=0,r=0,t=30,b=0)), use_container_width=True)
+
                 st.markdown("---")
+                st.subheader("2. Market vs AI Fair Value")
+                td = df_ml.tail(90).copy()
+                td['AI_Fair'] = (model.predict(td[features]) + 1) * td[target_ticker]
+                gap = ((df_ml[target_ticker].iloc[-1] - td['AI_Fair'].iloc[-1]) / td['AI_Fair'].iloc[-1]) * 100
                 
-                # --- クオンツディクショナリー (折りたたみ) ---
-                with st.expander("📚 クオンツ指標ディクショナリー (各指標の解説と見方)", expanded=False):
-                    st.markdown("""
-                    **【流動性・金融ストレス指標】**
-                    * **ANFCI (調整済み金融環境指数):** シカゴ連銀が算出。インフレや経済成長の影響を統計的に排除した「純粋な金融システムのストレス」。プラスなら引き締め的。
-                    * **STLFSI4 (金融ストレス指数):** 金利スプレッドなど18指標の合成。ゼロが平均。暴落時には急騰する。
-                    * **WALCL (FRB総資産):** 中央銀行のバランスシート。上昇は市場への資金供給（株高要因）、下落はQT（株安要因）。
-                    * **M2SL (M2マネーストック):** 市中に出回る通貨の総量。これが縮小するとリスク資産は構造的に上がりづらくなる。
-                    
-                    **【実体経済の先行指標】**
-                    * **T10Y3M (10年-3ヶ月金利差):** FRBのパウエル議長も注視する最も確実なリセッション先行指標。逆イールド（マイナス）後の順イールド化が最も危険。
-                    * **BAMLH0A0HYM2 (ハイイールド債スプレッド):** ジャンク債の金利上乗せ幅。企業の倒産リスク。これが広がり始めたら株は売られる。
-                    * **PERMIT (住宅建築許可件数):** 家を建てる前の「許可」件数。木材価格や家電消費、雇用に波及するため、実体経済の最強の先行指標となる。
-                    * **ICSA (新規失業保険申請件数):** 雇用統計を待たずに、毎週のレイオフ状況を最速で捉える。
-                    * **AWHAEMAN (製造業平均労働時間):** 企業は「解雇」の前に「残業カット」を行うため、雇用悪化の超・先行シグナル。
-                    
-                    **【市場内包シグナル・アノマリー】**
-                    * **Copper_Gold_Ratio (銅/金レシオ):** 景気に敏感な銅と、安全資産の金の比率。グローバル経済の体温計。米債利回りと強い正の相関を持つ。
-                    * **Risk_Appetite_Ratio (XLY/XLP):** 裁量消費（攻め）と生活必需品（守り）の比率。機関投資家が現在どちらに資金をシフトしているかが分かる。
-                    * **Presidential_Cycle (大統領選サイクル):** 0=選挙年、1=就任年、2=中間選挙年、3=選挙前年。米国株は「中間選挙年の秋に底を打ち、選挙前年に爆上げする」という強力なアノマリーを持つ。
-                    """)
+                fig_gap = go.Figure()
+                fig_gap.add_trace(go.Scatter(x=td.index, y=td[target_ticker], name="SPY Price", line=dict(color='#ff4b4b', width=2)))
+                fig_gap.add_trace(go.Scatter(x=td.index, y=td['AI_Fair'], name="AI Fair Value", line=dict(dash='dot', color='#58a6ff')))
+                st.plotly_chart(fig_gap.update_layout(template="plotly_dark", height=300, hovermode="x unified"), use_container_width=True)
 
-                # --- AI脳内可視化 ---
-                st.subheader("1. AI Brain Visualization (AIの思考プロセスと異常値検知)")
-                st.markdown("モデルが重視しているマクロ指標（棒の長さ）と、現在の値の過去3年平均からの乖離度（Z-Score / 色）です。")
-                
-                c_ai1, c_ai2 = st.columns([2, 1])
-                with c_ai1:
-                    fig_brain = px.bar(
-                        imp_df.sort_values('Importance', ascending=True), 
-                        x='Importance', y='Feature', orientation='h',
-                        color='Current_Z_Score', 
-                        color_continuous_scale='RdBu_r', 
-                        range_color=[-3, 3],
-                        title="Feature Importance × Current Abnormalities (Z-Score)"
-                    )
-                    fig_brain.update_layout(template="plotly_dark", height=400, margin=dict(l=0,r=0,t=40,b=0))
-                    st.plotly_chart(fig_brain, use_container_width=True)
-                
-                with c_ai2:
-                    st.markdown("#### 🔍 クオンツ・インサイト")
-                    st.markdown("* <span style='color:#f85149;'>**赤 (Hot):**</span> +2σ以上の異常値。")
-                    st.markdown("* <span style='color:#58a6ff;'>**青 (Cold):**</span> -2σ以下の異常値。")
-                    st.info(f"【現在のアノマリー状況】\n現在の年は大統領選サイクルにおいて **「{['選挙年', '就任年', '中間選挙年', '選挙前年'][df_ml['Presidential_Cycle'].iloc[-1]]}」** に該当します。\n※グラフ内で色が白い（0）の項目は、カテゴリ変数（アノマリー等）です。")
-
-                # --- Market vs AI Gap Analysis ---
                 st.markdown("---")
-                st.subheader("2. Swing Trade Setup (理論値とのスプレッド)")
-                c_g1, c_g2 = st.columns([2, 1])
-                with c_g1:
-                    td = df_ml.tail(90).copy()
-                    td['AI_Fair'] = (model.predict(td[features]) + 1) * td[target_ticker]
-                    fg = go.Figure()
-                    fg.add_trace(go.Scatter(x=td.index, y=td[target_ticker], name="Market Price", line=dict(color='#ff4b4b', width=2)))
-                    fg.add_trace(go.Scatter(x=td.index, y=td['AI_Fair'], name=f"AI Fair Value ({'Anomaly' if '反映' in anomaly_mode else 'Standard'})", line=dict(dash='dot', color='#58a6ff')))
-                    st.plotly_chart(fg.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=20,b=0), hovermode="x unified"), use_container_width=True)
-                with c_g2:
-                    gap = ((df_ml[target_ticker].iloc[-1] - td['AI_Fair'].iloc[-1]) / td['AI_Fair'].iloc[-1]) * 100
-                    st.metric("AI理論値からの乖離率 (Spread)", f"{gap:+.2f}%")
-                    st.write("市場価格がAIフェアバリューから上方に大きく乖離している場合、トレンド・エグゾースチョン（買い疲れ）による反落リスクが高まります。")
-
-                # --- 統合戦略判断 ---
-                st.markdown("---")
-                st.subheader("3. Executive Strategy Decision (1-Month Horizon)")
-                cl1, cl2 = st.columns([2, 1])
-                with cl1:
-                    stress_val = df_ml['ANFCI'].iloc[-1] if 'ANFCI' in df_ml.columns else 0
-                    score = pred_ret - (stress_val * 2) 
-                    
-                    if score > 2: status, color, icon = "積極的投資 (Aggressive Long)", "#00ff00", "🚀"
-                    elif score > -1: status, color, icon = "部分的投資 (Cautious)", "#58a6ff", "⚖️"
-                    else: status, color, icon = "防御的待機 (Risk Off)", "#f85149", "🛡️"
-                    
-                    st.markdown(f"<div class='insight-box' style='border-left: 5px solid {color};'><h3>AI判定: {icon} {status}</h3><p style='font-size:18px;'>AI 1ヶ月先 予測リターン: <b>{pred_ret:+.2f}%</b></p><p>ANFCI 金融ストレス水準: {stress_val:+.2f}</p></div>", unsafe_allow_html=True)
-                with cl2:
-                    vix_val = df_ml['^VIX'].iloc[-1] if '^VIX' in df_ml.columns else 20
+                col_f1, col_f2 = st.columns([2, 1])
+                with col_f1:
+                    st.markdown(f"<div class='insight-box'><h4>AI 1ヶ月予測リターン</h4><h2>{pred_ret:+.2f}%</h2></div>", unsafe_allow_html=True)
+                with col_f2:
+                    vix_val = df_ml['^VIX'].iloc[-1]
                     risk = max(0, min(100, (1/vix_val)*1500))
-                    if stress_val > 0: risk *= 0.8
-                    
-                    st.plotly_chart(go.Figure(go.Indicator(mode="gauge+number", value=risk, title={'text':"Target Risk Exposure (%)"}, gauge={'axis':{'range':[0,100]},'bar':{'color':color}})).update_layout(template="plotly_dark", height=200, margin=dict(t=30,b=0)), use_container_width=True)
+                    st.plotly_chart(go.Figure(go.Indicator(mode="gauge+number", value=risk, title={'text':"推奨リスク露出度"}, gauge={'bar':{'color':'#58a6ff'}})).update_layout(template="plotly_dark", height=200, margin=dict(t=30,b=0)), use_container_width=True)
 
-            except Exception as e: st.error(f"クオンツエンジン実行エラー: {e}")
-except Exception as e:
-    st.error(f"System Critical Error: {e}")
+                # ==========================================
+                # 🤖 LLM解説プロンプトの動的生成
+                # ==========================================
+                st.markdown("---")
+                st.subheader("🤖 LLM Analysis Prompt (言語化用プロンプト)")
+                st.markdown("以下のテキストをコピーして、GeminiやChatGPTに貼り付けてください。現在のデータを元に、プロのクオンツ目線で相場環境を解説してくれます。")
+
+                # 特徴量上位5つのテキスト化
+                top_features_text = ""
+                for _, row in imp_df.head(6).iterrows():
+                    top_features_text += f"- {row['Feature']}: 重要度 {row['Importance']:.4f}, 現在のZ-Score {row['Z_Score']:+.2f}\n"
+
+                anfci_val = df_ml['ANFCI'].iloc[-1] if 'ANFCI' in df_ml.columns else "データなし"
+                cycle_val = df_ml['Presidential_Cycle'].iloc[-1]
+                cycle_dict = {0: "選挙年", 1: "就任年", 2: "中間選挙年", 3: "選挙前年"}
+
+                llm_prompt = f"""あなたは世界トップクラスのマクロ・クオンツ・ファンドのシニア・ストラテジストです。
+以下の自社開発AIモデル（Random Forest）が出力した最新の算出結果を元に、現在の相場環境で「どのマクロ指標が支配的か」を言語化し、プロ目線の市場解説レポートを作成してください。
+
+【AIモデル分析結果 (対象: S&P500, スイングホライズン: 1ヶ月)】
+・AI予測 1ヶ月リターン: {pred_ret:+.2f}%
+・現在価格とAI適正価格の乖離率: {gap:+.2f}% (プラスなら相場が割高・過熱、マイナスなら割安)
+・現在のVIX (恐怖指数): {vix_val:.2f}
+・現在のANFCI (シカゴ連銀 金融環境指数): {anfci_val} (プラスなら引き締め的、マイナスなら緩和的)
+・現在の大統領選サイクル: {cycle_dict.get(cycle_val, "不明")}
+
+【AIが重視している特徴量上位と、現在値のZ-Score (直近3年比の異常度)】
+{top_features_text}
+※Z-Scoreが+2以上、または-2以下のものは、過去3年平均から大きく逸脱した「異常値」として相場を強く牽引・圧迫しています。
+
+【出力要件】
+1. 現在の市場を牽引（または圧迫）している主要なマクロ要因は何か？（特徴量のZ-Scoreの異常値を元に、なぜそれが効いているのか因果関係を考察してください）
+2. AIの適正価格との乖離(Spread)や、金融ストレス(ANFCI)を考慮した、現在の市場の「歪み」や「死角となるリスク」。
+3. クオンツ目線での、今後1ヶ月の具体的な投資スタンス（強気/弱気/中立）とアクションプラン。
+出力は、機関投資家のポートフォリオ・マネージャー宛てのレポートのような、論理的で洗練されたトーンにしてください。
+"""
+                st.code(llm_prompt, language="text")
+
+            except Exception as e: st.error(f"分析エラー: {e}")
