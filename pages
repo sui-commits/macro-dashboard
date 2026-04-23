@@ -1,10 +1,1 @@
-あなたのプロジェクトフォルダ/
- ├── utils.py                   # 共通の設定やキャッシュ関数を置く（新規作成）
- ├── app.py                     # メインの入り口（トップページになります）
- └── pages/                     # 必ずこの名前にする
-      ├── 1_Market_Dynamics.py  # PAGE 1 の中身を移す
-      ├── 2_Asset_Class.py      # PAGE 2 の中身を移す
-      ├── 3_Historical.py       # PAGE 3 の中身を移す
-      ├── 4_Quant_Engine.py     # PAGE 4 の中身を移す
-      ├── 5_Headline.py         # PAGE 5 の中身を移す
-      └── 6_Portfolio.py        # PAGE 6 の中身を移す
+1_Market_Dynamics.py
